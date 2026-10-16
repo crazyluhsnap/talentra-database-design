@@ -10,11 +10,12 @@
 ## Table of Contents
 1. Executive Summary & Design Principles
 2. Architectural Entity Relationship & Dependency Map
-3. Module 1: Master Data Schema Specification (21 Tables)
-4. Module 2: Profile Schema Specification (15 Tables)
-5. Module 3: Recruitment Schema Specification (12 Tables)
-6. Automated Integrity Triggers & Append-Only Enforcement
-7. Rule Groups 1–10 Compliance Verification
+3. Module 1: Master Data Schema Specification (23 Tables)
+4. Module 2: Profile Schema Specification (18 Tables)
+5. Module 3: Recruitment Schema Specification (13 Tables)
+6. High-Frequency Search, Scale & Indexing Architecture
+7. Automated Integrity Triggers & Append-Only Enforcement
+8. Rule Groups 1–10 Compliance Verification
 
 ---
 
@@ -116,23 +117,32 @@ The `master_data` schema serves as the enterprise catalog for global reference v
   * `longitude` (`numeric(9,6)`, Nullable): Longitude (-180.0 to +180.0).
 * **Dependencies:** Depends on `state`; referenced by `candidate_contact`, `job_requirement`, `candidate_job_search_history`.
 
-### 3.4 `master_data.currency`
+### 3.4 `master_data.location`
+* **Purpose:** Granular micro-geography, IT parks, SEZ zones, and campus locations within a city.
+* **Columns:** `id`, `city_id` (FK ➔ `city.id`), `name` (`varchar(150)`, NOT NULL), `postal_code`, `address_line`, `latitude`, `longitude`, `is_active`, audit columns.
+* **Dependencies:** Depends on `city`; referenced by office addresses and job locations.
+
+### 3.5 `master_data.currency`
 * **Purpose:** ISO 4217 monetary units required by Rule Group 3 for all financial figures.
 * **Columns:** `id`, `code` (`char(3)`, Unique), `name` (`varchar(50)`), `symbol` (`varchar(10)`).
-* **Dependencies:** Referenced by `job_requirement`, `job_offer`, `candidate_referral`.
+* **Dependencies:** Referenced by `job_requirement`, `job_offer`, `candidate_referral`, `candidate_preference`.
 
-### 3.5 `master_data.language`
+### 3.6 `master_data.language`
 * **Purpose:** ISO 639-1 language catalog for UI localization and candidate multilingual content.
 * **Columns:** `id`, `code` (`varchar(10)`, Unique), `name` (`varchar(100)`, Unique).
 * **Dependencies:** Referenced by `ui_translation`, `candidate_profile`, `resume_document`, `job_requirement`.
 
-### 3.6 `master_data.ui_translation_key` & 3.7 `master_data.ui_translation`
+### 3.7 `master_data.ui_translation_key` & 3.8 `master_data.ui_translation`
 * **Purpose:** Fulfills Rule Group 7 for multilingual UI strings. Decouples code keys from displayed text.
 * **Columns (`ui_translation_key`):** `id`, `key_code` (`varchar(150)`, Unique), `default_text`, `description`.
 * **Columns (`ui_translation`):** `id`, `ui_translation_key_id` (FK), `language_id` (FK), `translation` (`text`), `is_fallback` (`boolean`).
 * **Constraints:** `UNIQUE(ui_translation_key_id, language_id)`.
 
-### 3.8 to 3.21 Domain Lookup Tables
+### 3.9 `master_data.qualification`
+* **Purpose:** Standardized degree, diploma, and certification titles under academic levels (e.g. B.Tech, M.S., Ph.D.).
+* **Columns:** `id`, `education_level_id` (FK ➔ `education_level.id`), `code` (`varchar(50)`, Unique), `title` (`varchar(150)`), `abbreviation`, `sort_order`, `is_active`, audit columns.
+
+### 3.10 to 3.23 Domain Lookup Tables
 All lookup tables follow the PRD Rule Group 3 standard structure: `(id, code UNIQUE, display_name, sort_order, is_active, created_at, created_by, updated_at, updated_by)`.
 * `master_data.education_level`: High School, Diploma, Bachelor's, Master's, Doctorate.
 * `master_data.employment_type`: Full-time, Part-time, Contract, Apprentice, Internship.
@@ -203,21 +213,34 @@ The `profile` schema manages candidate identity, biographical details, resumes, 
 * **Key Columns (`resume_document`):** `id`, `candidate_profile_id` (FK), `resume_template_id` (FK), `version_number`, `file_uri`, `resume_body` (`text`, unbounded justified for full document text), `is_primary`.
 * **Constraint:** `UNIQUE(candidate_profile_id, version_number)`.
 
-### 4.10 `profile.candidate_assessment` & 4.11 `profile.candidate_course`
+### 4.10 `profile.candidate_certification`
+* **Purpose:** Industry certifications, cloud credentials (AWS, GCP, PMP), license numbers, and validity periods.
+* **Columns:** `id`, `candidate_profile_id` (FK ➔ `candidate_profile.id`), `certification_name` (`varchar(200)`), `issuing_organisation` (`varchar(200)`), `issue_date`, `expiration_date`, `credential_id`, `credential_url`, audit columns.
+* **Constraint:** `chk_candidate_cert_dates CHECK (expiration_date IS NULL OR issue_date IS NULL OR expiration_date >= issue_date)`.
+
+### 4.11 `profile.candidate_preference`
+* **Purpose:** Proactive job seeker discovery filters: desired roles, minimum salary expectation, notice period, preferred shift, willingness to relocate, and preferred cities.
+* **Columns:** `id`, `candidate_profile_id` (FK, UNIQUE), `preferred_job_role_id` (FK), `preferred_industry_id` (FK), `preferred_employment_type_id` (FK), `preferred_work_type_id` (FK), `preferred_city_id` (FK), `minimum_salary`, `salary_currency` (FK ➔ `currency.code`), `notice_period_days`, `is_relocation_willing`, audit columns.
+
+### 4.12 `profile.candidate_award`
+* **Purpose:** Honors, patents, distinctions, publications, and hackathon wins.
+* **Columns:** `id`, `candidate_profile_id` (FK), `title` (`varchar(200)`), `issuer` (`varchar(200)`), `awarded_date`, `description` (`varchar(2000)`), audit columns.
+
+### 4.13 `profile.candidate_assessment` & 4.14 `profile.candidate_course`
 * **Purpose:** Standardized assessment scores (Check `score >= 0 AND score <= max_score`) and professional course completions.
 
-### 4.12 `profile.candidate_bookmark`
+### 4.15 `profile.candidate_bookmark`
 * **Purpose:** Shortlist and bookmark history for employers and recruiters discovering candidates outside direct job applications.
 * **Columns:** `id`, `candidate_profile_id` (FK), `bookmarked_by_user_id`, `bookmarked_by_organisation_id`, `notes`, `bookmarked_at`.
 
-### 4.13 `profile.candidate_referral`
+### 4.16 `profile.candidate_referral`
 * **Purpose:** Referral tracking workflow with referral codes, status transitions, and reward amounts with companion currency codes.
 
-### 4.14 `profile.profile_view_history`
+### 4.17 `profile.profile_view_history`
 * **Purpose:** Append-only access log tracking which recruiters/employers viewed candidate profiles, timestamp, and credit deductions (Rule Group 10).
 * **Integrity:** Protected by `trg_profile_view_history_append_only` trigger preventing updates or deletes.
 
-### 4.15 `profile.candidate_activity_log`
+### 4.18 `profile.candidate_activity_log`
 * **Purpose:** Append-only log recording logins, profile updates, and resume downloads with IP addresses (Rule Group 4).
 * **Integrity:** Protected by `trg_candidate_activity_log_append_only` trigger.
 
@@ -281,26 +304,66 @@ The `recruitment` schema manages the demand side: job requirements, positions, s
 * **Purpose:** Interview rounds scheduled for applications across pipeline stages.
 * **Columns:** `id`, `job_application_id` (FK), `interview_type_id` (FK), `status_id` (FK), `interviewer_name`, `scheduled_at`, `feedback` (`varchar(4000)`), `rating` (`integer`, Check `1 to 5`).
 
-### 5.10 `recruitment.job_offer`
+### 5.10 `recruitment.interview_feedback`
+* **Purpose:** Multi-panel evaluator feedback, granular candidate scoring, and hiring recommendations.
+* **Columns:** `id`, `job_interview_id` (FK ➔ `job_interview.id`), `evaluator_user_id`, `evaluator_name`, `technical_rating` (Check `1 to 5`), `communication_rating` (Check `1 to 5`), `problem_solving_rating` (Check `1 to 5`), `overall_rating` (Check `1.0 to 5.0`), `strengths`, `improvement_areas`, `recommendation` (e.g. Strong Hire, Hire, Hold, Reject), `feedback_text`, audit columns.
+
+### 5.11 `recruitment.job_offer`
 * **Purpose:** Formal employment offers extended to candidates.
-* **Columns:** `id`, `job_application_id` (FK), `salary_amount` (`numeric(12,2)`, Check `>= 0`), `salary_currency` (`char(3)`, FK), `status_id` (FK ➔ `offer_status.id`), `offered_at`, `expires_at`, `responded_at`.
+* **Columns:** `id`, `job_application_id` (FK), `salary_amount` (`numeric(14,2)`, Check `>= 0`), `salary_currency` (`char(3)`, FK), `status_id` (FK ➔ `offer_status.id`), `offered_at`, `expires_at`, `responded_at`, audit columns.
 * **Constraint:** `chk_job_offer_dates CHECK (expires_at IS NULL OR expires_at >= offered_at)`.
 
-### 5.11 `recruitment.application_status_history`
+### 5.12 `recruitment.application_status_history`
 * **Purpose:** Full audit trail tracking application stage transitions (Rule Group 4 & 10).
-* **Columns:** `id`, `job_application_id` (FK), `from_status_id` (FK), `to_status_id` (FK), `changed_by`, `changed_at`, `notes`.
+* **Columns:** `id`, `job_application_id` (FK), `from_status_id` (FK), `to_status_id` (FK), `changed_by_user_id`, `changed_at`, `reason_code`, `notes`.
 * **Integrity:** Protected by `trg_application_status_history_append_only` trigger preventing updates and deletes.
 
-### 5.12 `recruitment.candidate_job_search_history`
+### 5.13 `recruitment.candidate_job_search_history`
 * **Purpose:** Telemetry recording candidate search terms, faceted filter selections, and result counts.
 * **Columns:** `id`, `candidate_profile_id` (FK), `search_keywords`, `city_id` (FK), `industry_id` (FK), `work_type_id` (FK), `results_count` (Check `>= 0`), `searched_at`.
 * **Integrity:** Protected by `trg_candidate_job_search_history_append_only` trigger.
 
 ---
 
-## 6. Automated Integrity Triggers & Append-Only Enforcement
+## 6. High-Frequency Search, Scale & Indexing Architecture
 
-### 6.1 Automatic Timestamp Refresh
+To support **10 million candidate profiles, 1 million active job requisitions, and 100 million applications**, Talentra implements a three-tier indexing and search access strategy:
+
+### 6.1 Search Query Frequency & Scale Taxonomy
+
+| Access Pattern | Target Entity | Frequency | Peak Scale | Optimization Strategy |
+| :--- | :--- | :--- | :--- | :--- |
+| **Instant Autocomplete / Typeahead** | `skill.skill_name`, `job_role.title`, `city.name` | **Ultra-High** (Thousands/sec) | 100k terms | GIN Trigram index (`gin_trgm_ops`) via `pg_trgm` extension for sub-5ms prefix/substring matches. |
+| **Job Search & Full-Text Retrieval** | `job_requirement (job_title, job_description)` | **High** (Hundreds/sec) | 1M jobs | GIN Full-Text Search index (`to_tsvector('english', ...)`). Partial index on non-deleted active jobs. |
+| **Resume & Profile Deep Search** | `candidate_profile`, `resume_document` | **Medium-High** (Recruiter searches) | 10M profiles | GIN Full-Text Search (`tsvector`) + Faceted composite B-Tree indexes on experience, location, readiness. |
+| **Recruiter Pipeline Kanban Triage** | `job_application`, `interview_feedback` | **High** (Recruiter workflow) | 100M apps | Triad B-Tree index `(job_requirement_id, status_id, applied_at DESC)` avoiding filesorts. |
+| **Search Telemetry & Analytics** | `candidate_job_search_history` | **Write-Intensive Append** | 500M rows | B-Tree index on `(searched_at DESC)` and `(city_id, searched_at DESC)` for rolling aggregation windows. |
+
+### 6.2 Full-Text Search (GIN `to_tsvector`) Implementation
+Traditional `LIKE '%keyword%'` queries cause destructive sequential scans at multi-million row scale. Talentra enforces GIN inverted full-text indexes:
+* `idx_job_requirement_fts`: Indexes English-stemmed tokens across job title and description.
+* `idx_candidate_profile_fts`: Indexes candidate professional headline and summary.
+* `idx_resume_document_fts`: Inverted index across unbounded extracted resume documents (`resume_body`).
+
+### 6.3 Sub-Millisecond Autocomplete (GIN `pg_trgm`)
+Job seekers typing into search boxes trigger typeahead queries at high frequency. Talentra leverages trigram decomposition:
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX idx_skill_name_trgm ON master_data.skill USING gin (skill_name gin_trgm_ops);
+CREATE INDEX idx_job_role_title_trgm ON master_data.job_role USING gin (title gin_trgm_ops);
+CREATE INDEX idx_city_name_trgm ON master_data.city USING gin (name gin_trgm_ops);
+```
+
+### 6.4 Faceted Search & Pipeline Indexing
+* **Partial Indexing on Active Jobs:** `idx_job_requirement_open_published` indexes only open, published, non-deleted jobs (`WHERE deleted_at IS NULL`), reducing index size by >80%.
+* **Candidate Discovery Facets:** `idx_candidate_profile_search_facets` indexes `(total_experience_months, is_actively_looking, is_profile_complete) WHERE deleted_at IS NULL`.
+* **Recruiter Pipeline Kanban:** `idx_job_application_pipeline_triad` indexes `(job_requirement_id, status_id, applied_at DESC)`.
+
+---
+
+## 7. Automated Integrity Triggers & Append-Only Enforcement
+
+### 7.1 Automatic Timestamp Refresh
 To eliminate application-side clock skew and guarantee audit reliability, a database-level trigger automatically updates `updated_at` before every row update:
 ```sql
 CREATE OR REPLACE FUNCTION set_updated_at()
@@ -311,9 +374,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 ```
-Bound across: `candidate_profile`, `candidate_contact`, `candidate_education`, `candidate_work_experience`, `candidate_skill`, `candidate_language`, `profile_project`, `resume_document`, `job_requirement`, `job_application`, `job_interview`, and `job_offer`.
+Bound across: all 18 mutable business tables in `master_data`, `profile`, and `recruitment`.
 
-### 6.2 Immutable Append-Only Ledger Enforcement
+### 7.2 Immutable Append-Only Ledger Enforcement
 To satisfy Rule Group 4 and 10 (*"Audit records are append-only. Application users cannot update or delete them"*), the database enforces strict immutability:
 ```sql
 CREATE OR REPLACE FUNCTION enforce_append_only()
@@ -331,11 +394,11 @@ Bound via `BEFORE UPDATE OR DELETE` triggers to:
 
 ---
 
-## 7. Rule Groups 1–10 Compliance Verification
+## 8. Rule Groups 1–10 Compliance Verification
 
 | Rule Group | Mandated Rule | Talentra Phase 1 Implementation Status |
 | :--- | :--- | :--- |
-| **Rule 1: Naming Conventions** | `snake_case`, singular nouns, PK is `id`, FK is `<target>_id`, indexes `idx_<table>_<column>`, unique constraints `uq_<table>_<column>`. | **100% Compliant.** All 48 tables, 68 foreign keys, 36 indexes, and unique constraints strictly conform. |
+| **Rule 1: Naming Conventions** | `snake_case`, singular nouns, PK is `id`, FK is `<target>_id`, indexes `idx_<table>_<column>`, unique constraints `uq_<table>_<column>`. | **100% Compliant.** All 54 tables, 85 foreign keys, 59 indexes, and unique constraints strictly conform. |
 | **Rule 2: Keys and Constraints** | Surrogate PK on every entity including junction tables. Explicit foreign key update/delete rules. Business check constraints. | **100% Compliant.** All junction tables have `id bigint IDENTITY PK`. All FKs enforce explicit actions (`CASCADE`, `RESTRICT`, or `SET NULL`). |
 | **Rule 3: Standard Domains** | Script-neutral person names up to 150 chars. Lowercase emails up to 254 chars. E.164 phone. Fixed-precision money with companion currency. Lookup tables replace all enums. | **100% Compliant.** Zero check-constraint enum arrays. E.164 and lowercase regex checks in place. Bounded text on all non-exempt fields. |
 | **Rule 4: Audit & Lifecycle** | `created_at, created_by, updated_at, updated_by` on all business tables. `deleted_at` for soft deletion. Append-only history. | **100% Compliant.** Audit columns present on all business tables. Database triggers enforce automatic updates and block mutations on history. |

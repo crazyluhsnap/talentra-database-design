@@ -3,6 +3,7 @@
 -- Database Schema Definition (Phase 1 Foundation: Master Data, Profile, Recruitment)
 -- Engine: PostgreSQL 14+
 -- Conforming to: Talentra PRD Data Standards and Domain Rules (Rule Groups 1 to 10)
+-- Extended with: Phase 1 Foundation Proposed Design Pack (B1–B23 Complete)
 -- ============================================================================
 
 SET statement_timeout = 0;
@@ -15,8 +16,10 @@ SET client_min_messages = warning;
 SET row_security = off;
 
 -- ----------------------------------------------------------------------------
--- SCHEMAS (Domain-driven partitioning per Rule Group 8)
+-- EXTENSIONS & SCHEMAS (Domain-driven partitioning per Rule Group 8)
 -- ----------------------------------------------------------------------------
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
 CREATE SCHEMA IF NOT EXISTS master_data;
 CREATE SCHEMA IF NOT EXISTS profile;
 CREATE SCHEMA IF NOT EXISTS recruitment;
@@ -81,11 +84,13 @@ CREATE TABLE master_data.state (
     CONSTRAINT uq_state_country_id_code UNIQUE (country_id, code)
 );
 
--- Cities (With explicit latitude/longitude coordinates per Rule Group 3)
+-- Cities (Direct country link, optional state for unitary states, coordinates per Rule Group 3)
 CREATE TABLE master_data.city (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    state_id bigint NOT NULL,
+    country_id bigint NOT NULL,
+    state_id bigint NULL,
     name varchar(100) NOT NULL,
+    postal_code varchar(20) NULL,
     latitude numeric(9,6) NULL,
     longitude numeric(9,6) NULL,
     is_active boolean NOT NULL DEFAULT true,
@@ -93,10 +98,31 @@ CREATE TABLE master_data.city (
     created_by bigint NULL,
     updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_by bigint NULL,
+    CONSTRAINT fk_city_country_id FOREIGN KEY (country_id)
+        REFERENCES master_data.country(id) ON UPDATE RESTRICT ON DELETE RESTRICT,
     CONSTRAINT fk_city_state_id FOREIGN KEY (state_id)
         REFERENCES master_data.state(id) ON UPDATE RESTRICT ON DELETE RESTRICT,
     CONSTRAINT chk_city_latitude CHECK (latitude IS NULL OR (latitude >= -90.0 AND latitude <= 90.0)),
     CONSTRAINT chk_city_longitude CHECK (longitude IS NULL OR (longitude >= -180.0 AND longitude <= 180.0))
+);
+
+-- Locations (Specific office park, campus, or sub-locality granularity)
+CREATE TABLE master_data.location (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    country_id bigint NOT NULL,
+    city_id bigint NULL,
+    location_name varchar(150) NOT NULL,
+    latitude numeric(9,6) NULL,
+    longitude numeric(9,6) NULL,
+    is_active boolean NOT NULL DEFAULT true,
+    created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    created_by bigint NULL,
+    updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_by bigint NULL,
+    CONSTRAINT fk_location_country_id FOREIGN KEY (country_id)
+        REFERENCES master_data.country(id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT fk_location_city_id FOREIGN KEY (city_id)
+        REFERENCES master_data.city(id) ON UPDATE RESTRICT ON DELETE RESTRICT
 );
 
 -- Currencies (Companion lookup for monetary amounts, ISO 4217 per Rule Group 3)
@@ -158,7 +184,7 @@ CREATE TABLE master_data.ui_translation (
     CONSTRAINT uq_ui_translation_key_language UNIQUE (ui_translation_key_id, language_id)
 );
 
--- Education Levels / Qualifications
+-- Education Levels / Tiers
 CREATE TABLE master_data.education_level (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     level_name varchar(100) NOT NULL,
@@ -169,6 +195,22 @@ CREATE TABLE master_data.education_level (
     updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_by bigint NULL,
     CONSTRAINT uq_education_level_level_name UNIQUE (level_name)
+);
+
+-- Qualifications (Specific degree titles mapped to education level, e.g., B.Tech, M.S., B.Sc.)
+CREATE TABLE master_data.qualification (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    education_level_id bigint NULL,
+    qualification_name varchar(150) NOT NULL,
+    qualification_code varchar(40) NULL,
+    is_active boolean NOT NULL DEFAULT true,
+    created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    created_by bigint NULL,
+    updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_by bigint NULL,
+    CONSTRAINT fk_qualification_education_level_id FOREIGN KEY (education_level_id)
+        REFERENCES master_data.education_level(id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT uq_qualification_name UNIQUE (qualification_name)
 );
 
 -- Employment Types (Full-time, Part-time, Contract, Apprentice, etc.)
@@ -199,6 +241,7 @@ CREATE TABLE master_data.work_type (
 CREATE TABLE master_data.industry (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     industry_name varchar(150) NOT NULL,
+    industry_code varchar(40) NULL,
     is_active boolean NOT NULL DEFAULT true,
     created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     created_by bigint NULL,
@@ -212,6 +255,7 @@ CREATE TABLE master_data.job_role (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     industry_id bigint NOT NULL,
     role_name varchar(150) NOT NULL,
+    role_code varchar(40) NULL,
     is_active boolean NOT NULL DEFAULT true,
     created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     created_by bigint NULL,
@@ -222,10 +266,11 @@ CREATE TABLE master_data.job_role (
     CONSTRAINT uq_job_role_industry_role UNIQUE (industry_id, role_name)
 );
 
--- Skills
+-- Skills (With normalized_name for case-insensitive and synonym matching)
 CREATE TABLE master_data.skill (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     skill_name varchar(100) NOT NULL,
+    normalized_name varchar(150) NULL,
     is_active boolean NOT NULL DEFAULT true,
     created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     created_by bigint NULL,
@@ -290,7 +335,7 @@ CREATE TABLE master_data.interview_status (
     CONSTRAINT uq_interview_status_code UNIQUE (code)
 );
 
--- Interview Type Lookup
+-- Interview Type Lookup (Technical, HR, Managerial, Panel)
 CREATE TABLE master_data.interview_type (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     code varchar(30) NOT NULL,
@@ -304,7 +349,7 @@ CREATE TABLE master_data.interview_type (
     CONSTRAINT uq_interview_type_code UNIQUE (code)
 );
 
--- Offer Status Lookup
+-- Offer Status Lookup (Pending, Accepted, Declined, Revoked)
 CREATE TABLE master_data.offer_status (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     code varchar(30) NOT NULL,
@@ -350,29 +395,39 @@ CREATE TABLE master_data.referral_status (
 -- ============================================================================
 -- MODULE 2: PROFILE
 -- Candidate core profile, contact, education, work experience, skills,
--- languages, resumes, templates, projects, assessments, bookmarks, and referrals.
+-- languages, resumes, templates, projects, assessments, certifications, preferences, and awards.
 -- ============================================================================
 
 -- Candidate Profile Core
 -- Rule 3: Person name text up to 150 chars, UTF-8, script/order neutral.
 -- Rule 4: Standard audit columns + deleted_at for soft deletion.
 -- Rule 7: User-entered content language recorded where known.
+-- Linkage: user_id for shared identity linkage, visibility code for privacy.
 CREATE TABLE profile.candidate_profile (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_id bigint NULL, -- Cross-module reference to shared auth/account module
     full_name varchar(150) NOT NULL,
     date_of_birth date NULL,
     headline varchar(250) NULL,
     summary varchar(2000) NULL,
+    country_id bigint NULL,
+    city_id bigint NULL,
     years_experience numeric(4,1) NULL,
     profile_completion_percentage numeric(5,2) NOT NULL DEFAULT 0.00,
+    profile_visibility_code varchar(30) NOT NULL DEFAULT 'public',
     content_language_id bigint NULL,
     created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     created_by bigint NULL,
     updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_by bigint NULL,
     deleted_at timestamptz NULL,
+    CONSTRAINT uq_candidate_profile_user_id UNIQUE (user_id),
     CONSTRAINT chk_candidate_profile_years_experience CHECK (years_experience IS NULL OR years_experience >= 0.0),
     CONSTRAINT chk_candidate_profile_completion CHECK (profile_completion_percentage >= 0.00 AND profile_completion_percentage <= 100.00),
+    CONSTRAINT fk_candidate_profile_country_id FOREIGN KEY (country_id)
+        REFERENCES master_data.country(id) ON UPDATE RESTRICT ON DELETE SET NULL,
+    CONSTRAINT fk_candidate_profile_city_id FOREIGN KEY (city_id)
+        REFERENCES master_data.city(id) ON UPDATE RESTRICT ON DELETE SET NULL,
     CONSTRAINT fk_candidate_profile_language_id FOREIGN KEY (content_language_id)
         REFERENCES master_data.language(id) ON UPDATE RESTRICT ON DELETE SET NULL
 );
@@ -389,6 +444,7 @@ CREATE TABLE profile.candidate_contact (
     country_id bigint NULL,
     address_line varchar(255) NULL,
     postal_code varchar(20) NULL,
+    contact_visibility_code varchar(30) NOT NULL DEFAULT 'recruiter_only',
     created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     created_by bigint NULL,
     updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -411,12 +467,16 @@ CREATE TABLE profile.candidate_education (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     candidate_profile_id bigint NOT NULL,
     education_level_id bigint NOT NULL,
+    qualification_id bigint NULL,
     institution_name varchar(200) NOT NULL,
     qualification varchar(200) NULL,
     field_of_study varchar(200) NULL,
     start_date date NULL,
     end_date date NULL,
+    grade_value numeric(6,2) NULL,
+    grade_scale varchar(30) NULL,
     grade varchar(50) NULL,
+    is_current boolean NOT NULL DEFAULT false,
     created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     created_by bigint NULL,
     updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -426,6 +486,8 @@ CREATE TABLE profile.candidate_education (
         REFERENCES profile.candidate_profile(id) ON UPDATE RESTRICT ON DELETE CASCADE,
     CONSTRAINT fk_candidate_education_education_level_id FOREIGN KEY (education_level_id)
         REFERENCES master_data.education_level(id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT fk_candidate_education_qualification_id FOREIGN KEY (qualification_id)
+        REFERENCES master_data.qualification(id) ON UPDATE RESTRICT ON DELETE SET NULL,
     CONSTRAINT chk_candidate_education_dates CHECK (end_date IS NULL OR start_date IS NULL OR end_date >= start_date)
 );
 
@@ -438,6 +500,7 @@ CREATE TABLE profile.candidate_work_experience (
     employment_type_id bigint NULL,
     start_date date NULL,
     end_date date NULL,
+    is_current boolean NOT NULL DEFAULT false,
     description varchar(3000) NULL,
     created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     created_by bigint NULL,
@@ -524,7 +587,7 @@ CREATE TABLE profile.resume_template (
     CONSTRAINT uq_resume_template_name UNIQUE (template_name)
 );
 
--- Resume Documents (Tier 2: Versioning, template mapping, unbounded text justified for parsed bodies)
+-- Resume Documents (Tier 2: Versioning, template mapping, storage key, mime type, size, parsed body)
 CREATE TABLE profile.resume_document (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     candidate_profile_id bigint NOT NULL,
@@ -532,6 +595,9 @@ CREATE TABLE profile.resume_document (
     version_number integer NOT NULL DEFAULT 1,
     title varchar(150) NOT NULL,
     file_uri varchar(500) NOT NULL,
+    storage_key varchar(500) NULL,
+    mime_type varchar(100) NOT NULL DEFAULT 'application/pdf',
+    file_size_bytes bigint NULL,
     resume_body text NULL, -- Rule 3: Unbounded text justified for full parsed resume content
     content_language_id bigint NULL,
     is_primary boolean NOT NULL DEFAULT false,
@@ -546,7 +612,76 @@ CREATE TABLE profile.resume_document (
         REFERENCES profile.resume_template(id) ON UPDATE RESTRICT ON DELETE SET NULL,
     CONSTRAINT fk_resume_document_language_id FOREIGN KEY (content_language_id)
         REFERENCES master_data.language(id) ON UPDATE RESTRICT ON DELETE SET NULL,
-    CONSTRAINT uq_resume_document_version UNIQUE (candidate_profile_id, version_number)
+    CONSTRAINT uq_resume_document_version UNIQUE (candidate_profile_id, version_number),
+    CONSTRAINT chk_resume_document_size CHECK (file_size_bytes IS NULL OR file_size_bytes >= 0)
+);
+
+-- Professional Certifications
+CREATE TABLE profile.candidate_certification (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    candidate_profile_id bigint NOT NULL,
+    certification_name varchar(200) NOT NULL,
+    issuer varchar(200) NULL,
+    credential_id varchar(150) NULL,
+    credential_url varchar(2048) NULL,
+    issue_date date NULL,
+    expiry_date date NULL,
+    created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    created_by bigint NULL,
+    updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_by bigint NULL,
+    deleted_at timestamptz NULL,
+    CONSTRAINT fk_candidate_certification_candidate_profile_id FOREIGN KEY (candidate_profile_id)
+        REFERENCES profile.candidate_profile(id) ON UPDATE RESTRICT ON DELETE CASCADE,
+    CONSTRAINT chk_candidate_certification_expiry CHECK (expiry_date IS NULL OR issue_date IS NULL OR expiry_date >= issue_date)
+);
+
+-- Candidate Preferences (Target job role, preferred location, preferred employment type, min salary)
+CREATE TABLE profile.candidate_preference (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    candidate_profile_id bigint NOT NULL,
+    job_role_id bigint NULL,
+    location_id bigint NULL,
+    employment_type_id bigint NULL,
+    work_type_id bigint NULL,
+    minimum_salary numeric(14,2) NULL,
+    salary_currency char(3) NULL,
+    is_active boolean NOT NULL DEFAULT true,
+    created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    created_by bigint NULL,
+    updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_by bigint NULL,
+    deleted_at timestamptz NULL,
+    CONSTRAINT fk_candidate_preference_candidate_profile_id FOREIGN KEY (candidate_profile_id)
+        REFERENCES profile.candidate_profile(id) ON UPDATE RESTRICT ON DELETE CASCADE,
+    CONSTRAINT fk_candidate_preference_job_role_id FOREIGN KEY (job_role_id)
+        REFERENCES master_data.job_role(id) ON UPDATE RESTRICT ON DELETE SET NULL,
+    CONSTRAINT fk_candidate_preference_location_id FOREIGN KEY (location_id)
+        REFERENCES master_data.location(id) ON UPDATE RESTRICT ON DELETE SET NULL,
+    CONSTRAINT fk_candidate_preference_employment_type_id FOREIGN KEY (employment_type_id)
+        REFERENCES master_data.employment_type(id) ON UPDATE RESTRICT ON DELETE SET NULL,
+    CONSTRAINT fk_candidate_preference_work_type_id FOREIGN KEY (work_type_id)
+        REFERENCES master_data.work_type(id) ON UPDATE RESTRICT ON DELETE SET NULL,
+    CONSTRAINT fk_candidate_preference_currency FOREIGN KEY (salary_currency)
+        REFERENCES master_data.currency(code) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT chk_candidate_preference_salary CHECK (minimum_salary IS NULL OR minimum_salary >= 0.0)
+);
+
+-- Candidate Honors & Awards
+CREATE TABLE profile.candidate_award (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    candidate_profile_id bigint NOT NULL,
+    award_name varchar(200) NOT NULL,
+    issuer varchar(200) NULL,
+    award_date date NULL,
+    description varchar(2000) NULL,
+    created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    created_by bigint NULL,
+    updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_by bigint NULL,
+    deleted_at timestamptz NULL,
+    CONSTRAINT fk_candidate_award_candidate_profile_id FOREIGN KEY (candidate_profile_id)
+        REFERENCES profile.candidate_profile(id) ON UPDATE RESTRICT ON DELETE CASCADE
 );
 
 -- Candidate Assessments & Scores (Tier 2)
@@ -651,7 +786,7 @@ CREATE TABLE profile.candidate_activity_log (
 -- ============================================================================
 -- MODULE 3: RECRUITMENT (JOBS AND APPLICATIONS)
 -- Job requirements, positions, consultant openness, questionnaires,
--- options, applications, pipeline stages, interviews, offers, shortlists,
+-- options, applications, pipeline stages, multi-interviewer feedback, offers, shortlists,
 -- and candidate job search history.
 -- ============================================================================
 
@@ -661,25 +796,27 @@ CREATE TABLE profile.candidate_activity_log (
 CREATE TABLE recruitment.job_requirement (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     organisation_id bigint NULL, -- Owning employer organisation
+    created_by_user_id bigint NULL, -- Recruiter/hiring manager account who created the job
     job_title varchar(200) NOT NULL,
     job_description text NOT NULL, -- Rule 3: Unbounded text justified for job descriptions
     employment_type_id bigint NOT NULL,
     work_type_id bigint NOT NULL,
     industry_id bigint NULL,
     job_role_id bigint NULL,
+    location_id bigint NULL,
     city_id bigint NULL,
     country_id bigint NOT NULL,
     positions_count integer NOT NULL DEFAULT 1,
     min_experience_years numeric(4,1) NULL,
     max_experience_years numeric(4,1) NULL,
-    min_salary numeric(12,2) NULL,
-    max_salary numeric(12,2) NULL,
+    min_salary numeric(14,2) NULL,
+    max_salary numeric(14,2) NULL,
     currency_code char(3) NULL,
     status_id bigint NOT NULL,
     is_open_to_consultants boolean NOT NULL DEFAULT false, -- Section 3 business rule
     content_language_id bigint NULL,
     published_at timestamptz NULL,
-    closed_at timestamptz NULL,
+    closes_at timestamptz NULL,
     created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     created_by bigint NULL,
     updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -693,6 +830,8 @@ CREATE TABLE recruitment.job_requirement (
         REFERENCES master_data.industry(id) ON UPDATE RESTRICT ON DELETE SET NULL,
     CONSTRAINT fk_job_requirement_job_role_id FOREIGN KEY (job_role_id)
         REFERENCES master_data.job_role(id) ON UPDATE RESTRICT ON DELETE SET NULL,
+    CONSTRAINT fk_job_requirement_location_id FOREIGN KEY (location_id)
+        REFERENCES master_data.location(id) ON UPDATE RESTRICT ON DELETE SET NULL,
     CONSTRAINT fk_job_requirement_city_id FOREIGN KEY (city_id)
         REFERENCES master_data.city(id) ON UPDATE RESTRICT ON DELETE SET NULL,
     CONSTRAINT fk_job_requirement_country_id FOREIGN KEY (country_id)
@@ -741,7 +880,9 @@ CREATE TABLE recruitment.job_questionnaire (
     job_requirement_id bigint NOT NULL,
     title varchar(200) NOT NULL,
     instructions varchar(2000) NULL,
+    version_number integer NOT NULL DEFAULT 1,
     is_mandatory boolean NOT NULL DEFAULT false,
+    is_active boolean NOT NULL DEFAULT true,
     created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     created_by bigint NULL,
     updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -789,8 +930,9 @@ CREATE TABLE recruitment.job_application (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     job_requirement_id bigint NOT NULL,
     candidate_profile_id bigint NOT NULL,
-    resume_document_id bigint NULL,
+    selected_resume_document_id bigint NULL,
     status_id bigint NOT NULL,
+    source_code varchar(30) NOT NULL DEFAULT 'direct',
     cover_letter varchar(4000) NULL, -- Bounded free text
     applied_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -802,7 +944,7 @@ CREATE TABLE recruitment.job_application (
         REFERENCES recruitment.job_requirement(id) ON UPDATE RESTRICT ON DELETE CASCADE,
     CONSTRAINT fk_job_application_candidate_profile_id FOREIGN KEY (candidate_profile_id)
         REFERENCES profile.candidate_profile(id) ON UPDATE RESTRICT ON DELETE CASCADE,
-    CONSTRAINT fk_job_application_resume_document_id FOREIGN KEY (resume_document_id)
+    CONSTRAINT fk_job_application_resume_document_id FOREIGN KEY (selected_resume_document_id)
         REFERENCES profile.resume_document(id) ON UPDATE RESTRICT ON DELETE SET NULL,
     CONSTRAINT fk_job_application_status_id FOREIGN KEY (status_id)
         REFERENCES master_data.application_status(id) ON UPDATE RESTRICT ON DELETE RESTRICT,
@@ -848,14 +990,18 @@ CREATE TABLE recruitment.job_shortlist (
     CONSTRAINT uq_job_shortlist UNIQUE (job_requirement_id, candidate_profile_id)
 );
 
--- Job Interviews
+-- Job Interviews (Scheduled rounds across pipeline)
 CREATE TABLE recruitment.job_interview (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     job_application_id bigint NOT NULL,
     interview_type_id bigint NOT NULL,
     status_id bigint NOT NULL,
+    interview_round integer NOT NULL DEFAULT 1,
+    mode_code varchar(30) NOT NULL DEFAULT 'video',
+    meeting_reference varchar(500) NULL,
     interviewer_name varchar(150) NULL,
     scheduled_at timestamptz NOT NULL,
+    completed_at timestamptz NULL,
     feedback varchar(4000) NULL,
     rating integer NULL,
     created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -869,14 +1015,40 @@ CREATE TABLE recruitment.job_interview (
         REFERENCES master_data.interview_type(id) ON UPDATE RESTRICT ON DELETE RESTRICT,
     CONSTRAINT fk_job_interview_status_id FOREIGN KEY (status_id)
         REFERENCES master_data.interview_status(id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT chk_job_interview_round CHECK (interview_round > 0),
+    CONSTRAINT chk_job_interview_dates CHECK (completed_at IS NULL OR completed_at >= scheduled_at),
     CONSTRAINT chk_job_interview_rating CHECK (rating IS NULL OR (rating >= 1 AND rating <= 5))
+);
+
+-- Interview Multi-Panel Feedback (Independent scoring per interviewer on a panel)
+CREATE TABLE recruitment.interview_feedback (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    job_interview_id bigint NOT NULL,
+    interviewer_user_id bigint NULL,
+    interviewer_name varchar(150) NULL,
+    technical_rating smallint NULL,
+    communication_rating smallint NULL,
+    problem_solving_rating smallint NULL,
+    overall_rating numeric(3,1) NULL,
+    recommendation_code varchar(30) NULL, -- strong_hire, hire, no_hire, strong_no_hire
+    feedback_text varchar(4000) NULL,
+    created_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    created_by bigint NULL,
+    updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    updated_by bigint NULL,
+    CONSTRAINT fk_interview_feedback_job_interview_id FOREIGN KEY (job_interview_id)
+        REFERENCES recruitment.job_interview(id) ON UPDATE RESTRICT ON DELETE CASCADE,
+    CONSTRAINT chk_feedback_technical CHECK (technical_rating IS NULL OR (technical_rating >= 1 AND technical_rating <= 5)),
+    CONSTRAINT chk_feedback_communication CHECK (communication_rating IS NULL OR (communication_rating >= 1 AND communication_rating <= 5)),
+    CONSTRAINT chk_feedback_problem_solving CHECK (problem_solving_rating IS NULL OR (problem_solving_rating >= 1 AND problem_solving_rating <= 5)),
+    CONSTRAINT chk_feedback_overall CHECK (overall_rating IS NULL OR (overall_rating >= 1.0 AND overall_rating <= 5.0))
 );
 
 -- Job Offers (Pipeline offer stage)
 CREATE TABLE recruitment.job_offer (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     job_application_id bigint NOT NULL,
-    salary_amount numeric(12,2) NOT NULL,
+    salary_amount numeric(14,2) NOT NULL,
     salary_currency char(3) NOT NULL,
     status_id bigint NOT NULL,
     offered_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
@@ -903,8 +1075,9 @@ CREATE TABLE recruitment.application_status_history (
     job_application_id bigint NOT NULL,
     from_status_id bigint NULL,
     to_status_id bigint NOT NULL,
-    changed_by bigint NULL,
+    changed_by_user_id bigint NULL,
     changed_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
+    reason_code varchar(50) NULL,
     notes varchar(2000) NULL,
     CONSTRAINT fk_application_status_history_application_id FOREIGN KEY (job_application_id)
         REFERENCES recruitment.job_application(id) ON UPDATE RESTRICT ON DELETE CASCADE,
@@ -940,7 +1113,13 @@ CREATE TABLE recruitment.candidate_job_search_history (
 -- AUTOMATED TRIGGERS (Rule Group 4 & Rule Group 10)
 -- ============================================================================
 
--- updated_at maintenance triggers
+-- updated_at maintenance triggers across all business entities
+CREATE TRIGGER trg_location_updated_at BEFORE UPDATE ON master_data.location
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_qualification_updated_at BEFORE UPDATE ON master_data.qualification
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
 CREATE TRIGGER trg_candidate_profile_updated_at BEFORE UPDATE ON profile.candidate_profile
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
@@ -965,6 +1144,15 @@ FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_resume_document_updated_at BEFORE UPDATE ON profile.resume_document
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
+CREATE TRIGGER trg_candidate_certification_updated_at BEFORE UPDATE ON profile.candidate_certification
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_candidate_preference_updated_at BEFORE UPDATE ON profile.candidate_preference
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_candidate_award_updated_at BEFORE UPDATE ON profile.candidate_award
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
 CREATE TRIGGER trg_job_requirement_updated_at BEFORE UPDATE ON recruitment.job_requirement
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
@@ -972,6 +1160,9 @@ CREATE TRIGGER trg_job_application_updated_at BEFORE UPDATE ON recruitment.job_a
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE TRIGGER trg_job_interview_updated_at BEFORE UPDATE ON recruitment.job_interview
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_interview_feedback_updated_at BEFORE UPDATE ON recruitment.interview_feedback
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 CREATE TRIGGER trg_job_offer_updated_at BEFORE UPDATE ON recruitment.job_offer
@@ -992,28 +1183,35 @@ FOR EACH ROW EXECUTE FUNCTION enforce_append_only();
 
 
 -- ============================================================================
--- INDEXES
+-- INDEXES & HIGH-PERFORMANCE ACCESS PATHS (Page 8 of Design Pack)
 -- Rule 1: Pattern idx_table_column
 -- ============================================================================
 
 -- Master Data Indexes
 CREATE INDEX idx_state_country_id ON master_data.state USING btree (country_id);
+CREATE INDEX idx_city_country_id ON master_data.city USING btree (country_id);
 CREATE INDEX idx_city_state_id ON master_data.city USING btree (state_id);
+CREATE INDEX idx_location_city_id ON master_data.location USING btree (city_id);
+CREATE INDEX idx_qualification_education_level_id ON master_data.qualification USING btree (education_level_id);
 CREATE INDEX idx_job_role_industry_id ON master_data.job_role USING btree (industry_id);
 CREATE INDEX idx_ui_translation_key_id ON master_data.ui_translation USING btree (ui_translation_key_id);
 CREATE INDEX idx_ui_translation_language_id ON master_data.ui_translation USING btree (language_id);
 
 -- Profile Module Indexes
+CREATE INDEX idx_candidate_profile_user_id ON profile.candidate_profile USING btree (user_id);
 CREATE INDEX idx_candidate_contact_candidate_profile_id ON profile.candidate_contact USING btree (candidate_profile_id);
 CREATE INDEX idx_candidate_contact_city_id ON profile.candidate_contact USING btree (city_id);
 CREATE INDEX idx_candidate_education_candidate_profile_id ON profile.candidate_education USING btree (candidate_profile_id);
 CREATE INDEX idx_candidate_work_experience_candidate_profile_id ON profile.candidate_work_experience USING btree (candidate_profile_id);
 CREATE INDEX idx_candidate_skill_candidate_profile_id ON profile.candidate_skill USING btree (candidate_profile_id);
-CREATE INDEX idx_candidate_skill_skill_id ON profile.candidate_skill USING btree (skill_id);
+CREATE INDEX idx_candidate_skill_matching ON profile.candidate_skill USING btree (skill_id, candidate_profile_id); -- Skill-first matching index
 CREATE INDEX idx_candidate_language_candidate_profile_id ON profile.candidate_language USING btree (candidate_profile_id);
 CREATE INDEX idx_candidate_language_language_id ON profile.candidate_language USING btree (language_id);
 CREATE INDEX idx_profile_project_candidate_profile_id ON profile.profile_project USING btree (candidate_profile_id);
 CREATE INDEX idx_resume_document_candidate_profile_id ON profile.resume_document USING btree (candidate_profile_id);
+CREATE INDEX idx_candidate_certification_candidate_profile_id ON profile.candidate_certification USING btree (candidate_profile_id);
+CREATE INDEX idx_candidate_preference_candidate_profile_id ON profile.candidate_preference USING btree (candidate_profile_id);
+CREATE INDEX idx_candidate_award_candidate_profile_id ON profile.candidate_award USING btree (candidate_profile_id);
 CREATE INDEX idx_candidate_assessment_candidate_profile_id ON profile.candidate_assessment USING btree (candidate_profile_id);
 CREATE INDEX idx_candidate_course_candidate_profile_id ON profile.candidate_course USING btree (candidate_profile_id);
 CREATE INDEX idx_candidate_bookmark_candidate_profile_id ON profile.candidate_bookmark USING btree (candidate_profile_id);
@@ -1026,21 +1224,46 @@ CREATE INDEX idx_job_requirement_status_id ON recruitment.job_requirement USING 
 CREATE INDEX idx_job_requirement_city_id ON recruitment.job_requirement USING btree (city_id);
 CREATE INDEX idx_job_requirement_employment_type_id ON recruitment.job_requirement USING btree (employment_type_id);
 CREATE INDEX idx_job_requirement_work_type_id ON recruitment.job_requirement USING btree (work_type_id);
+CREATE INDEX idx_job_requirement_open_published ON recruitment.job_requirement USING btree (published_at DESC) WHERE deleted_at IS NULL; -- Partial index for active jobs
 CREATE INDEX idx_job_requirement_skill_job_requirement_id ON recruitment.job_requirement_skill USING btree (job_requirement_id);
 CREATE INDEX idx_job_requirement_skill_skill_id ON recruitment.job_requirement_skill USING btree (skill_id);
 CREATE INDEX idx_job_questionnaire_job_requirement_id ON recruitment.job_questionnaire USING btree (job_requirement_id);
 CREATE INDEX idx_job_question_job_questionnaire_id ON recruitment.job_question USING btree (job_questionnaire_id);
 CREATE INDEX idx_job_question_option_job_question_id ON recruitment.job_question_option USING btree (job_question_id);
-CREATE INDEX idx_job_application_candidate_profile_id ON recruitment.job_application USING btree (candidate_profile_id);
-CREATE INDEX idx_job_application_job_requirement_id ON recruitment.job_application USING btree (job_requirement_id);
-CREATE INDEX idx_job_application_status_id ON recruitment.job_application USING btree (status_id);
+CREATE INDEX idx_job_application_pipeline ON recruitment.job_application USING btree (job_requirement_id, status_id); -- Recruiter pipeline index
+CREATE INDEX idx_job_application_candidate_applied ON recruitment.job_application USING btree (candidate_profile_id, applied_at DESC); -- Candidate timeline index
 CREATE INDEX idx_candidate_question_answer_application_id ON recruitment.candidate_question_answer USING btree (job_application_id);
 CREATE INDEX idx_job_shortlist_job_requirement_id ON recruitment.job_shortlist USING btree (job_requirement_id);
 CREATE INDEX idx_job_shortlist_candidate_profile_id ON recruitment.job_shortlist USING btree (candidate_profile_id);
 CREATE INDEX idx_job_interview_job_application_id ON recruitment.job_interview USING btree (job_application_id);
+CREATE INDEX idx_interview_feedback_job_interview_id ON recruitment.interview_feedback USING btree (job_interview_id);
 CREATE INDEX idx_job_offer_job_application_id ON recruitment.job_offer USING btree (job_application_id);
-CREATE INDEX idx_application_status_history_application_id ON recruitment.application_status_history USING btree (job_application_id);
+CREATE INDEX idx_application_status_history_timeline ON recruitment.application_status_history USING btree (job_application_id, changed_at DESC); -- Chronological timeline index
 CREATE INDEX idx_candidate_job_search_history_candidate_profile_id ON recruitment.candidate_job_search_history USING btree (candidate_profile_id);
+
+-- ----------------------------------------------------------------------------
+-- ADVANCED SEARCH & HIGH-FREQUENCY SCALE INDEXES (Full-Text, Trigram, Facets)
+-- ----------------------------------------------------------------------------
+
+-- 1. Full-Text Search (GIN tsvector) for multi-million scale keyword searching
+CREATE INDEX idx_job_requirement_fts ON recruitment.job_requirement USING gin (to_tsvector('english', job_title || ' ' || coalesce(job_description, '')));
+CREATE INDEX idx_candidate_profile_fts ON profile.candidate_profile USING gin (to_tsvector('english', coalesce(headline, '') || ' ' || coalesce(summary, '')));
+CREATE INDEX idx_resume_document_fts ON profile.resume_document USING gin (to_tsvector('english', coalesce(resume_body, '')));
+
+-- 2. High-Frequency Trigram Autocomplete (GIN gin_trgm_ops) for sub-millisecond typeahead
+CREATE INDEX idx_skill_name_trgm ON master_data.skill USING gin (skill_name gin_trgm_ops);
+CREATE INDEX idx_job_role_title_trgm ON master_data.job_role USING gin (title gin_trgm_ops);
+CREATE INDEX idx_city_name_trgm ON master_data.city USING gin (name gin_trgm_ops);
+
+-- 3. Composite & Faceted Search Indexes for high-concurrency filtering
+CREATE INDEX idx_candidate_profile_search_facets ON profile.candidate_profile USING btree (total_experience_months, is_actively_looking, is_profile_complete) WHERE deleted_at IS NULL;
+CREATE INDEX idx_job_requirement_search_facets ON recruitment.job_requirement USING btree (city_id, industry_id, employment_type_id, min_salary, max_salary) WHERE deleted_at IS NULL;
+CREATE INDEX idx_job_application_pipeline_triad ON recruitment.job_application USING btree (job_requirement_id, status_id, applied_at DESC);
+
+-- 4. Search Telemetry & Analytics Access Paths
+CREATE INDEX idx_candidate_job_search_history_timeline ON recruitment.candidate_job_search_history USING btree (searched_at DESC);
+CREATE INDEX idx_candidate_job_search_history_city ON recruitment.candidate_job_search_history USING btree (city_id, searched_at DESC);
+
 
 
 -- ============================================================================
@@ -1062,11 +1285,14 @@ COMMENT ON COLUMN profile.candidate_referral.referral_code IS 'Classification: P
 -- Sensitive Data (Sensitive)
 COMMENT ON COLUMN recruitment.job_offer.salary_amount IS 'Classification: Sensitive';
 COMMENT ON COLUMN recruitment.job_offer.salary_currency IS 'Classification: Sensitive';
+COMMENT ON COLUMN profile.candidate_preference.minimum_salary IS 'Classification: Sensitive';
 COMMENT ON COLUMN profile.candidate_referral.reward_amount IS 'Classification: Sensitive';
 
 -- Internal Operational Data (Internal)
 COMMENT ON COLUMN recruitment.job_interview.feedback IS 'Classification: Internal';
 COMMENT ON COLUMN recruitment.job_interview.rating IS 'Classification: Internal';
+COMMENT ON COLUMN recruitment.interview_feedback.feedback_text IS 'Classification: Internal';
+COMMENT ON COLUMN recruitment.interview_feedback.overall_rating IS 'Classification: Internal';
 COMMENT ON COLUMN recruitment.job_shortlist.notes IS 'Classification: Internal';
 COMMENT ON COLUMN profile.candidate_bookmark.notes IS 'Classification: Internal';
 COMMENT ON COLUMN recruitment.application_status_history.notes IS 'Classification: Internal';
