@@ -890,7 +890,10 @@ CREATE TABLE recruitment.job_questionnaire (
     deleted_at timestamptz NULL,
     CONSTRAINT fk_job_questionnaire_job_requirement_id FOREIGN KEY (job_requirement_id)
         REFERENCES recruitment.job_requirement(id) ON UPDATE RESTRICT ON DELETE CASCADE,
-    CONSTRAINT uq_job_questionnaire_job_requirement_id UNIQUE (job_requirement_id)
+    CONSTRAINT uq_job_questionnaire_job_version
+        UNIQUE (job_requirement_id, version_number),
+    CONSTRAINT chk_job_questionnaire_version
+        CHECK (version_number > 0)
 );
 
 -- Questionnaire Questions
@@ -1306,5 +1309,185 @@ COMMENT ON COLUMN master_data.country.name IS 'Classification: Public';
 COMMENT ON COLUMN master_data.city.name IS 'Classification: Public';
 COMMENT ON COLUMN master_data.skill.skill_name IS 'Classification: Public';
 COMMENT ON COLUMN recruitment.job_requirement.job_title IS 'Classification: Public';
+-- ============================================================
+-- Phase 1 integrity hardening
+-- Resume ownership, questionnaire answers, and job consistency
+-- ============================================================
+
+-- 1. A resume selected by an application must belong to that
+--    application's candidate.
+ALTER TABLE profile.resume_document
+    ADD CONSTRAINT uq_resume_document_candidate_id
+    UNIQUE (candidate_profile_id, id);
+
+ALTER TABLE recruitment.job_application
+    DROP CONSTRAINT IF EXISTS fk_job_application_resume_document_id;
+
+ALTER TABLE recruitment.job_application
+    ADD CONSTRAINT fk_job_application_candidate_resume
+    FOREIGN KEY (candidate_profile_id, selected_resume_document_id)
+    REFERENCES profile.resume_document (candidate_profile_id, id)
+    ON UPDATE RESTRICT
+    ON DELETE SET NULL (selected_resume_document_id);
+
+
+-- 2. A selected answer option must belong to the question answered.
+ALTER TABLE recruitment.job_question_option
+    ADD CONSTRAINT uq_job_question_option_question_id
+    UNIQUE (job_question_id, id);
+
+ALTER TABLE recruitment.candidate_question_answer
+    DROP CONSTRAINT IF EXISTS fk_candidate_question_answer_option_id;
+
+ALTER TABLE recruitment.candidate_question_answer
+    ADD CONSTRAINT fk_candidate_answer_question_option
+    FOREIGN KEY (job_question_id, selected_option_id)
+    REFERENCES recruitment.job_question_option (job_question_id, id)
+    ON UPDATE RESTRICT
+    ON DELETE SET NULL (selected_option_id);
+
+
+-- 3. Validate that an answer's question belongs to a questionnaire
+--    for the job attached to that application.
+CREATE OR REPLACE FUNCTION recruitment.check_candidate_answer_questionnaire()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM recruitment.job_application AS ja
+        JOIN recruitment.job_question AS jq
+          ON jq.id = NEW.job_question_id
+        JOIN recruitment.job_questionnaire AS qn
+          ON qn.id = jq.job_questionnaire_id
+        WHERE ja.id = NEW.job_application_id
+          AND ja.job_requirement_id = qn.job_requirement_id
+    ) THEN
+        RAISE EXCEPTION
+            'Question % does not belong to a questionnaire for the job on application %',
+            NEW.job_question_id, NEW.job_application_id
+            USING ERRCODE = '23514';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_candidate_answer_questionnaire_integrity
+BEFORE INSERT OR UPDATE OF job_application_id, job_question_id
+ON recruitment.candidate_question_answer
+FOR EACH ROW
+EXECUTE FUNCTION recruitment.check_candidate_answer_questionnaire();
+
+
+-- 4. Prevent changing an application's job if its existing answers
+--    would then refer to questions for a different job.
+CREATE OR REPLACE FUNCTION recruitment.check_application_questionnaire_consistency()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM recruitment.candidate_question_answer AS ca
+        JOIN recruitment.job_question AS jq
+          ON jq.id = ca.job_question_id
+        JOIN recruitment.job_questionnaire AS qn
+          ON qn.id = jq.job_questionnaire_id
+        WHERE ca.job_application_id = NEW.id
+          AND qn.job_requirement_id <> NEW.job_requirement_id
+    ) THEN
+        RAISE EXCEPTION
+            'Changing job on application % would invalidate its questionnaire answers',
+            NEW.id
+            USING ERRCODE = '23514';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_application_questionnaire_consistency
+BEFORE UPDATE OF job_requirement_id
+ON recruitment.job_application
+FOR EACH ROW
+WHEN (OLD.job_requirement_id IS DISTINCT FROM NEW.job_requirement_id)
+EXECUTE FUNCTION recruitment.check_application_questionnaire_consistency();
+
+
+-- 5. Prevent moving an answered question to a questionnaire for a
+--    different job.
+CREATE OR REPLACE FUNCTION recruitment.check_question_questionnaire_consistency()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    new_questionnaire_job_id bigint;
+BEGIN
+    SELECT qn.job_requirement_id
+      INTO new_questionnaire_job_id
+    FROM recruitment.job_questionnaire AS qn
+    WHERE qn.id = NEW.job_questionnaire_id;
+
+    IF EXISTS (
+        SELECT 1
+        FROM recruitment.candidate_question_answer AS ca
+        JOIN recruitment.job_application AS ja
+          ON ja.id = ca.job_application_id
+        WHERE ca.job_question_id = NEW.id
+          AND ja.job_requirement_id <> new_questionnaire_job_id
+    ) THEN
+        RAISE EXCEPTION
+            'Moving question % would invalidate existing questionnaire answers',
+            NEW.id
+            USING ERRCODE = '23514';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_question_questionnaire_consistency
+BEFORE UPDATE OF job_questionnaire_id
+ON recruitment.job_question
+FOR EACH ROW
+WHEN (OLD.job_questionnaire_id IS DISTINCT FROM NEW.job_questionnaire_id)
+EXECUTE FUNCTION recruitment.check_question_questionnaire_consistency();
+
+
+-- 6. Prevent changing a questionnaire's job when answered questions
+--    in that questionnaire would become inconsistent.
+CREATE OR REPLACE FUNCTION recruitment.check_questionnaire_job_consistency()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM recruitment.job_question AS jq
+        JOIN recruitment.candidate_question_answer AS ca
+          ON ca.job_question_id = jq.id
+        JOIN recruitment.job_application AS ja
+          ON ja.id = ca.job_application_id
+        WHERE jq.job_questionnaire_id = NEW.id
+          AND ja.job_requirement_id <> NEW.job_requirement_id
+    ) THEN
+        RAISE EXCEPTION
+            'Changing job on questionnaire % would invalidate existing answers',
+            NEW.id
+            USING ERRCODE = '23514';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_questionnaire_job_consistency
+BEFORE UPDATE OF job_requirement_id
+ON recruitment.job_questionnaire
+FOR EACH ROW
+WHEN (OLD.job_requirement_id IS DISTINCT FROM NEW.job_requirement_id)
+EXECUTE FUNCTION recruitment.check_questionnaire_job_consistency();
 COMMENT ON COLUMN recruitment.job_requirement.job_description IS 'Classification: Public';
 COMMENT ON COLUMN recruitment.job_question.question_text IS 'Classification: Public';

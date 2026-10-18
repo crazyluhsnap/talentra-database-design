@@ -492,7 +492,7 @@ INSERT INTO recruitment.job_questionnaire (job_requirement_id, title, instructio
 SELECT jr.id, 'Database Architecture Screening Questionnaire', 'Please provide honest technical answers.', 1, true
 FROM recruitment.job_requirement jr
 WHERE jr.job_title = 'Principal PostgreSQL Database Architect'
-ON CONFLICT (job_requirement_id) DO NOTHING;
+ON CONFLICT (job_requirement_id, version_number) DO NOTHING;
 
 INSERT INTO recruitment.job_question (job_questionnaire_id, question_text, question_type_id, is_required, sort_order)
 SELECT jq.id, 'How many years of production PostgreSQL query optimization experience do you have?', qt.id, true, 1
