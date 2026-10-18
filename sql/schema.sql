@@ -1252,11 +1252,11 @@ CREATE INDEX idx_resume_document_fts ON profile.resume_document USING gin (to_ts
 
 -- 2. High-Frequency Trigram Autocomplete (GIN gin_trgm_ops) for sub-millisecond typeahead
 CREATE INDEX idx_skill_name_trgm ON master_data.skill USING gin (skill_name gin_trgm_ops);
-CREATE INDEX idx_job_role_title_trgm ON master_data.job_role USING gin (title gin_trgm_ops);
+CREATE INDEX idx_job_role_name_trgm ON master_data.job_role USING gin (role_name gin_trgm_ops);
 CREATE INDEX idx_city_name_trgm ON master_data.city USING gin (name gin_trgm_ops);
 
 -- 3. Composite & Faceted Search Indexes for high-concurrency filtering
-CREATE INDEX idx_candidate_profile_search_facets ON profile.candidate_profile USING btree (total_experience_months, is_actively_looking, is_profile_complete) WHERE deleted_at IS NULL;
+CREATE INDEX idx_candidate_profile_search_facets ON profile.candidate_profile USING btree (years_experience, profile_completion_percentage, profile_visibility_code) WHERE deleted_at IS NULL;
 CREATE INDEX idx_job_requirement_search_facets ON recruitment.job_requirement USING btree (city_id, industry_id, employment_type_id, min_salary, max_salary) WHERE deleted_at IS NULL;
 CREATE INDEX idx_job_application_pipeline_triad ON recruitment.job_application USING btree (job_requirement_id, status_id, applied_at DESC);
 

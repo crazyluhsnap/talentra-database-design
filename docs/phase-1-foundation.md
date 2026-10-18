@@ -95,3 +95,43 @@ The team has aligned the database modularization with the hackathon project dock
 | **8: Naming of Physical Objects** | Compliant | Table schemas partitioned by domain (`master_data`, `profile`, `recruitment`). |
 | **9: Licensing, Devices & Sessions** | In Scope for Phase 2/3 | Architecture leaves hook points for user/licence mapping. |
 | **10: Money, Subscriptions & History** | Compliant (Phase 1) | Application status and profile view histories are append-only. Offers enforce valid expiration bounds. |
+
+---
+
+## Milestone 7: Final Phase 1 Sign-Off (B23) & Phase 2 Readiness
+
+### B1–B23 Deliverables Verification Register
+
+| Deliverable Artifact | Description & Contents | Status | Sign-off Evidence |
+| :--- | :--- | :---: | :--- |
+| **Provider Decision Record (B1)** | PostgreSQL 14+ selected with engine rationale and sizing compatibility. | **Approved** | Documented in `docs/phase-1-foundation.md` |
+| **Entity Inventory (B2–B7)** | 54 tables covering Master Data (23), Candidate Profile (18), Recruitment (13). | **Approved** | Documented in `docs/phase-1-architecture-specification.md` |
+| **ER Relationship Model (B8–B11)** | Cardinalities, junction tables, and 1:1, 1:N foreign key cascades. | **Approved** | Full dependency diagram in architecture spec |
+| **Data Dictionary & Register (B12–B15)** | Nullability justifications and 4-tier data classification tags. | **Approved** | Documented in `docs/data-dictionary-phase-1.md` |
+| **Constraint & Index Register (B16–B22)** | PKs, FKs, unique/check constraints, date invariants, and 59 indexes. | **Approved** | DDL implemented in `sql/schema.sql` |
+| **Automated Forensic Ledgers (B20–B22)**| PL/pgSQL append-only triggers preventing mutations on history. | **Approved** | Triggers in `sql/schema.sql` |
+| **Final Phase 1 Sign-Off (B23)** | Formal team approval for transition to Phase 2. | **Approved** | Validated via `inspect_schema.py` |
+
+---
+
+## Phase 2 Integration Seams & Cross-Module Boundaries
+
+Phase 1 establishes clean, decoupled landing spots for subsequent phases without circular dependencies:
+
+1. **Authentication & Identity (`auth` module):**
+   * `profile.candidate_profile.user_id` (`bigint NULL UNIQUE`): Connects candidate identity to shared account service upon user registration.
+   * `recruitment.job_requirement.created_by_user_id`: Connects job postings to internal recruiter accounts.
+   * `recruitment.interview_feedback.interviewer_user_id`: Links evaluations to interviewer accounts.
+
+2. **Organisations & Employers (`organisation` module):**
+   * `recruitment.job_requirement.organisation_id` (`bigint NULL`): Connects jobs to employer tenancy without hardcoding company profile logic in recruitment.
+   * `profile.candidate_bookmark.bookmarked_by_organisation_id`: Connects candidate talent pools to recruiter organisations.
+
+3. **Billing, Wallets & Financials (`billing` module):**
+   * `profile.profile_view_history.credit_deducted`: Hooks directly into credit deduction/burn logic.
+   * `profile.candidate_referral.reward_amount` & `reward_currency`: Connects into referral bounty payouts.
+
+4. **Forensic Search & AI Matching (`search` / `matching` module):**
+   * `recruitment.candidate_job_search_history`: Supplies telemetry data for search ranking and candidate recommendation models.
+   * Partial indexes (`idx_job_requirement_open_published`, `idx_candidate_skill_matching`, GIN trigrams) ready for high-concurrency candidate matching.
+
