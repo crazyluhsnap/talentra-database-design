@@ -1,18 +1,25 @@
 import re
+import glob
 
 def inspect():
-    with open('sql/schema.sql', 'r', encoding='utf-8') as f:
-        sql = f.read()
+    sql_files = ['sql/schema.sql', 'sql/phase2_administration.sql']
+    all_sql = ""
+    for file_path in sql_files:
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                all_sql += f.read() + "\n"
+        except FileNotFoundError:
+            pass
 
     # Find schemas
-    schemas = re.findall(r'CREATE SCHEMA IF NOT EXISTS\s+(\w+);', sql, re.IGNORECASE)
+    schemas = sorted(list(set(re.findall(r'CREATE SCHEMA IF NOT EXISTS\s+(\w+);', all_sql, re.IGNORECASE))))
     
     # Find tables
     table_pattern = re.compile(r'CREATE TABLE\s+([a-zA-Z0-9_\.]+)\s*\((.*?)\);', re.DOTALL | re.IGNORECASE)
-    tables = table_pattern.findall(sql)
+    tables = table_pattern.findall(all_sql)
 
     print("=" * 70)
-    print("TALENTRA DATABASE SCHEMA INSPECTOR (PHASE 1)")
+    print("TALENTRA DATABASE SCHEMA INSPECTOR (PHASE 1 + PHASE 2)")
     print("=" * 70)
     print(f"Schemas Defined ({len(schemas)}): {', '.join(schemas)}")
     print(f"Total Tables Created in DDL: {len(tables)}\n")
@@ -37,8 +44,8 @@ def inspect():
         print()
 
     # Indexes & Triggers
-    indexes = re.findall(r'CREATE INDEX\s+(\w+)', sql, re.IGNORECASE)
-    triggers = re.findall(r'CREATE TRIGGER\s+(\w+)', sql, re.IGNORECASE)
+    indexes = re.findall(r'CREATE (?:UNIQUE )?INDEX\s+(\w+)', all_sql, re.IGNORECASE)
+    triggers = re.findall(r'CREATE TRIGGER\s+(\w+)', all_sql, re.IGNORECASE)
     print("=" * 70)
     print(f"Summary: {len(tables)} Tables | {len(indexes)} Indexes | {len(triggers)} Automated Triggers")
     print("=" * 70)
