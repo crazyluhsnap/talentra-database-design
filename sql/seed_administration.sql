@@ -203,17 +203,50 @@ FROM administration.role r WHERE r.code = 'recruiter'
 ON CONFLICT DO NOTHING;
 
 -- ----------------------------------------------------------------------------
--- 7. SEED INITIAL PRIVACY CONSENT EVIDENCE
+-- 7. SEED REGULATED CONSENT PURPOSES (DPDP / GDPR Catalog)
 -- ----------------------------------------------------------------------------
-INSERT INTO administration.consent_record (
-    user_account_id, purpose_code, notice_version, decision_code, collection_source_code
-)
-VALUES 
-    (1001, 'recruitment_matching', 'v2026.1', 'granted', 'web'),
-    (1001, 'profile_discovery', 'v2026.1', 'granted', 'web');
+INSERT INTO administration.consent_purpose (
+    code, title, description, lawful_basis_code, is_mandatory, retention_days, active_notice_version
+) VALUES
+    ('terms_and_conditions', 'Platform Terms of Service', 'Core contractual requirements to use Talentra matching services', 'contractual_necessity', true, NULL, 'v2026.1'),
+    ('recruitment_matching', 'Automated Job Matching & Sourcing', 'Processing profile data to recommend relevant job requisitions', 'consent', true, 730, 'v2026.1'),
+    ('profile_discovery', 'Recruiter Talent Pool Discovery', 'Allows verified corporate recruiters to discover and view candidate profiles', 'consent', false, 730, 'v2026.1'),
+    ('marketing_newsletter', 'Product Updates & Career Newsletter', 'Periodic career advice and platform product updates', 'consent', false, 365, 'v2026.1'),
+    ('third_party_analytics', 'Performance & Usage Telemetry', 'Anonymous usage telemetry to optimize platform load times', 'legitimate_interest', false, 180, 'v2026.1')
+ON CONFLICT (code) DO UPDATE
+SET title = EXCLUDED.title,
+    description = EXCLUDED.description,
+    is_active = true;
 
 -- ----------------------------------------------------------------------------
--- 8. ATTACH PHASE 1 CROSS-MODULE BRIDGE FOREIGN KEY
+-- 8. SEED INITIAL PRIVACY CONSENT EVIDENCE
+-- ----------------------------------------------------------------------------
+INSERT INTO administration.consent_record (
+    user_account_id, consent_purpose_id, purpose_code, notice_version, decision_code, collection_source_code
+)
+SELECT 
+    1001, cp.id, cp.code, 'v2026.1', 'granted', 'web'
+FROM administration.consent_purpose cp
+WHERE cp.code IN ('recruitment_matching', 'profile_discovery');
+
+-- ----------------------------------------------------------------------------
+-- 9. SEED DYNAMIC SYSTEM SETTINGS & RUNTIME POLICIES
+-- ----------------------------------------------------------------------------
+INSERT INTO administration.system_setting (
+    setting_key, setting_value, value_data_type, category_code, is_public, description
+) VALUES
+    ('auth.max_failed_logins', '5', 'integer', 'security', false, 'Consecutive failed login attempts allowed before temporary lockout'),
+    ('auth.lockout_duration_minutes', '15', 'integer', 'security', false, 'Lockout duration window before exponential backoff reset'),
+    ('auth.mfa_enforced_roles', '["super_admin", "admin", "account_admin"]', 'json', 'security', false, 'Roles for which multi-factor authentication is mandatory'),
+    ('platform.maintenance_mode', 'false', 'boolean', 'platform', true, 'Global platform maintenance toggle (read-only mode)'),
+    ('storage.max_resume_upload_mb', '15', 'integer', 'platform', true, 'Maximum file size permitted for candidate PDF resumes (MB)'),
+    ('session.idle_timeout_minutes', '60', 'integer', 'security', false, 'Duration of inactivity before interactive session invalidation')
+ON CONFLICT (setting_key) DO UPDATE
+SET setting_value = EXCLUDED.setting_value,
+    description = EXCLUDED.description;
+
+-- ----------------------------------------------------------------------------
+-- 10. ATTACH PHASE 1 CROSS-MODULE BRIDGE FOREIGN KEY
 -- Now that user 1001 is guaranteed to exist, attach the foreign key constraint.
 -- ----------------------------------------------------------------------------
 DO $$

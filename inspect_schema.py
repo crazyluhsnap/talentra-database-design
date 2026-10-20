@@ -2,7 +2,12 @@ import re
 import glob
 
 def inspect():
-    sql_files = ['sql/schema.sql', 'sql/phase2_administration.sql']
+    sql_files = [
+        'sql/schema.sql',
+        'sql/phase2_administration.sql',
+        'sql/phase2_organisation.sql',
+        'sql/phase2_gig_marketplace.sql'
+    ]
     all_sql = ""
     for file_path in sql_files:
         try:
