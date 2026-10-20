@@ -193,7 +193,137 @@ BEGIN
         RAISE NOTICE 'PASS 8: non-positive questionnaire version rejected';
     END;
 
-    RAISE NOTICE 'ALL 8 REGRESSION TESTS PASSED';
+    -- TEST 9: Soft-deleted contact email re-registration allowed (Partial Unique Index)
+    DECLARE
+        v_contact_test_id bigint;
+        v_contact_re_reg_id bigint;
+    BEGIN
+        INSERT INTO profile.candidate_contact
+            (candidate_profile_id, email, contact_visibility_code)
+        VALUES
+            (v_candidate_2, 'softdel.test@example.com', 'public')
+        RETURNING id INTO v_contact_test_id;
+
+        -- Soft delete the contact record
+        UPDATE profile.candidate_contact
+        SET deleted_at = CURRENT_TIMESTAMP
+        WHERE id = v_contact_test_id;
+
+        -- Create a third candidate to re-register the same email
+        INSERT INTO profile.candidate_profile (full_name)
+        VALUES ('Re-register Test Candidate')
+        RETURNING id INTO v_contact_re_reg_id;
+
+        -- Must succeed because the previous record with this email is soft-deleted
+        INSERT INTO profile.candidate_contact
+            (candidate_profile_id, email, contact_visibility_code)
+        VALUES
+            (v_contact_re_reg_id, 'softdel.test@example.com', 'public');
+
+        RAISE NOTICE 'PASS 9: soft-deleted email re-registration permitted';
+    END;
+
+    -- TEST 10: Mixed-case email must be rejected by check constraint
+    BEGIN
+        INSERT INTO profile.candidate_contact
+            (candidate_profile_id, email, contact_visibility_code)
+        VALUES
+            (v_candidate_2, 'UPPERCASE.TEST@EXAMPLE.COM', 'public');
+
+        RAISE EXCEPTION 'FAIL: uppercase email was accepted';
+    EXCEPTION WHEN check_violation THEN
+        RAISE NOTICE 'PASS 10: uppercase email rejected by check constraint';
+    END;
+
+    -- TEST 11: Non-E.164 phone number must be rejected
+    BEGIN
+        INSERT INTO profile.candidate_contact
+            (candidate_profile_id, email, phone, contact_visibility_code)
+        VALUES
+            (v_candidate_2, 'phone.invalid@example.com', '0987654321', 'public');
+
+        RAISE EXCEPTION 'FAIL: non-E.164 phone was accepted';
+    EXCEPTION WHEN check_violation THEN
+        RAISE NOTICE 'PASS 11: non-E.164 phone rejected by regex check';
+    END;
+
+    -- TEST 12: Inverted education dates (end_date < start_date) must be rejected
+    BEGIN
+        INSERT INTO profile.candidate_education
+            (candidate_profile_id, education_level_id, institution_name, start_date, end_date)
+        SELECT v_candidate_2, id, 'Test Tech Institute', '2024-01-01', '2020-01-01'
+        FROM master_data.education_level LIMIT 1;
+
+        RAISE EXCEPTION 'FAIL: inverted education dates were accepted';
+    EXCEPTION WHEN check_violation THEN
+        RAISE NOTICE 'PASS 12: inverted education dates rejected';
+    END;
+
+    -- TEST 13: Inverted job salary (min_salary > max_salary) must be rejected
+    BEGIN
+        INSERT INTO recruitment.job_requirement
+            (job_title, job_description, employment_type_id, work_type_id, country_id, status_id, min_salary, max_salary, currency_code)
+        VALUES
+            ('Invalid Salary Job', 'Testing salary check', v_employment_type_id, v_work_type_id, v_country_id, v_status_id, 100000.00, 50000.00, 'INR');
+
+        RAISE EXCEPTION 'FAIL: min_salary > max_salary was accepted';
+    EXCEPTION WHEN check_violation THEN
+        RAISE NOTICE 'PASS 13: min_salary > max_salary rejected';
+    END;
+
+    -- TEST 14: Oversized resume (>15MB) must be rejected
+    BEGIN
+        INSERT INTO profile.resume_document
+            (candidate_profile_id, title, file_uri, file_size_bytes)
+        VALUES
+            (v_candidate_2, 'Oversized Resume', 'test://oversized', 20000000); -- 20MB > 15MB limit
+
+        RAISE EXCEPTION 'FAIL: oversized resume was accepted';
+    EXCEPTION WHEN check_violation THEN
+        RAISE NOTICE 'PASS 14: oversized resume (>15MB) rejected';
+    END;
+
+    -- TEST 15: Automated pipeline status synchronization
+    DECLARE
+        v_offer_status_id bigint;
+        v_history_count_before integer;
+        v_history_count_after integer;
+    BEGIN
+        SELECT id INTO STRICT v_offer_status_id
+        FROM master_data.application_status
+        WHERE code = 'offered' LIMIT 1;
+
+        SELECT count(*) INTO v_history_count_before
+        FROM recruitment.application_status_history
+        WHERE job_application_id = v_application_id;
+
+        -- Update status on job_application
+        UPDATE recruitment.job_application
+        SET status_id = v_offer_status_id
+        WHERE id = v_application_id;
+
+        SELECT count(*) INTO v_history_count_after
+        FROM recruitment.application_status_history
+        WHERE job_application_id = v_application_id;
+
+        IF v_history_count_after > v_history_count_before THEN
+            RAISE NOTICE 'PASS 15: automated application status history synchronization verified';
+        ELSE
+            RAISE EXCEPTION 'FAIL: status change did not trigger history creation';
+        END IF;
+    END;
+
+    -- TEST 16: Job deletion must be blocked when applications exist (RESTRICT rule)
+    BEGIN
+        DELETE FROM recruitment.job_requirement
+        WHERE id = v_job_id;
+
+        RAISE EXCEPTION 'FAIL: job requirement with active applications was deleted';
+    EXCEPTION WHEN foreign_key_violation THEN
+        RAISE NOTICE 'PASS 16: job deletion with applications blocked by ON DELETE RESTRICT';
+    END;
+
+    RAISE NOTICE 'ALL 16 ENTERPRISE REGRESSION TESTS PASSED SUCCESSFULLY';
 END;
 $$;
 

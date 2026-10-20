@@ -32,11 +32,13 @@ talentra-database-design/
 ├── docs/                                   # Architectural documentation & registers
 │   ├── competitive-coverage-benchmark.md   # Benchmark vs. LinkedIn, Naukri & Superset
 │   ├── data-dictionary-phase-1.md          # Nullability justifications & data classifications
+│   ├── er-diagram-phase-1.mermaid          # Baseline Mermaid ER Diagram (Step 21)
 │   ├── phase-1-architecture-specification.md # Physical schema & scaling architecture
 │   └── phase-1-foundation.md               # B1–B23 milestones & Phase 2 readiness matrix
 ├── sql/                                    # Production PostgreSQL scripts
-│   ├── schema.sql                          # Complete DDL (Schemas, 54 Tables, 59 Indexes, 22 Triggers)
-│   └── seed.sql                            # Comprehensive seed data for testing & demonstrations
+│   ├── schema.sql                          # Complete DDL (Schemas, 54 Tables, 59 Indexes, 27 Triggers)
+│   ├── seed.sql                            # Comprehensive seed data for testing & demonstrations
+│   └── integrity_regression_test.sql       # 16 automated negative & invariant test scenarios
 ├── inspect_schema.py                       # Python validation script inspecting schema structure
 └── README.md                               # Project documentation & execution guide
 ```
@@ -48,9 +50,9 @@ talentra-database-design/
 | Schema Domain | Tables | Key Focus Areas |
 | :--- | :---: | :--- |
 | `master_data` | **23** | Countries, states, cities, locations, currencies, languages, UI translations, and relational lookups avoiding hardcoded string enums |
-| `profile` | **18** | Candidate profile, contact (E.164 + lowercase checks), education, experience, skill/language bridges, projects, resumes, certifications, preferences, awards, view history |
-| `recruitment` | **13** | Job requirements, required skills, versioned questionnaires, typed questions & choices, applications, candidate answers, interviews, feedback, offers, status histories |
-| **Total** | **54** | **59 Indexes, 22 Automated Triggers, 100% Rule Groups 1–10 Compliant** |
+| `profile` | **18** | Candidate profile, contact (E.164 + lowercase checks, partial unique indexes), education, experience, skill/language bridges, projects, resumes, certifications, preferences, awards, view history |
+| `recruitment` | **13** | Job requirements, required skills, versioned questionnaires, typed questions & choices, applications, candidate answers, interviews, feedback, offers, automated status transition history |
+| **Total** | **54** | **59 Indexes, 27 Automated Triggers, 16 Regression Tests, 100% Rule Groups 1–10 Compliant** |
 
 ---
 

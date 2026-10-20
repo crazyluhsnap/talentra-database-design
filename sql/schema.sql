@@ -421,7 +421,6 @@ CREATE TABLE profile.candidate_profile (
     updated_at timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
     updated_by bigint NULL,
     deleted_at timestamptz NULL,
-    CONSTRAINT uq_candidate_profile_user_id UNIQUE (user_id),
     CONSTRAINT chk_candidate_profile_years_experience CHECK (years_experience IS NULL OR years_experience >= 0.0),
     CONSTRAINT chk_candidate_profile_completion CHECK (profile_completion_percentage >= 0.00 AND profile_completion_percentage <= 100.00),
     CONSTRAINT fk_candidate_profile_country_id FOREIGN KEY (country_id)
@@ -431,6 +430,9 @@ CREATE TABLE profile.candidate_profile (
     CONSTRAINT fk_candidate_profile_language_id FOREIGN KEY (content_language_id)
         REFERENCES master_data.language(id) ON UPDATE RESTRICT ON DELETE SET NULL
 );
+
+-- Partial unique index for active candidates (prevents lockout on soft-deleted re-registration)
+CREATE UNIQUE INDEX uq_candidate_profile_active_user ON profile.candidate_profile (user_id) WHERE deleted_at IS NULL;
 
 -- Candidate Contact Details
 -- Rule 3: Email up to 254 chars, lowercase unique. Phone in E.164 with country code.
@@ -456,11 +458,13 @@ CREATE TABLE profile.candidate_contact (
         REFERENCES master_data.city(id) ON UPDATE RESTRICT ON DELETE SET NULL,
     CONSTRAINT fk_candidate_contact_country_id FOREIGN KEY (country_id)
         REFERENCES master_data.country(id) ON UPDATE RESTRICT ON DELETE SET NULL,
-    CONSTRAINT uq_candidate_contact_candidate_profile_id UNIQUE (candidate_profile_id),
-    CONSTRAINT uq_candidate_contact_email UNIQUE (email),
     CONSTRAINT chk_candidate_contact_email_lower CHECK (email = lower(email)),
     CONSTRAINT chk_candidate_contact_phone_e164 CHECK (phone IS NULL OR phone ~ '^\+[1-9]\d{1,14}$')
 );
+
+-- Partial unique indexes for active contact details (prevents blocking re-registration upon soft deletion)
+CREATE UNIQUE INDEX uq_candidate_contact_active_profile ON profile.candidate_contact (candidate_profile_id) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX uq_candidate_contact_active_email ON profile.candidate_contact (email) WHERE deleted_at IS NULL;
 
 -- Candidate Education
 CREATE TABLE profile.candidate_education (
@@ -613,7 +617,7 @@ CREATE TABLE profile.resume_document (
     CONSTRAINT fk_resume_document_language_id FOREIGN KEY (content_language_id)
         REFERENCES master_data.language(id) ON UPDATE RESTRICT ON DELETE SET NULL,
     CONSTRAINT uq_resume_document_version UNIQUE (candidate_profile_id, version_number),
-    CONSTRAINT chk_resume_document_size CHECK (file_size_bytes IS NULL OR file_size_bytes >= 0)
+    CONSTRAINT chk_resume_document_size CHECK (file_size_bytes IS NULL OR (file_size_bytes >= 0 AND file_size_bytes <= 15728640)) -- 15MB upper bound per PRD Section 4
 );
 
 -- Professional Certifications
@@ -944,15 +948,17 @@ CREATE TABLE recruitment.job_application (
     updated_by bigint NULL,
     deleted_at timestamptz NULL,
     CONSTRAINT fk_job_application_job_requirement_id FOREIGN KEY (job_requirement_id)
-        REFERENCES recruitment.job_requirement(id) ON UPDATE RESTRICT ON DELETE CASCADE,
+        REFERENCES recruitment.job_requirement(id) ON UPDATE RESTRICT ON DELETE RESTRICT,
     CONSTRAINT fk_job_application_candidate_profile_id FOREIGN KEY (candidate_profile_id)
-        REFERENCES profile.candidate_profile(id) ON UPDATE RESTRICT ON DELETE CASCADE,
+        REFERENCES profile.candidate_profile(id) ON UPDATE RESTRICT ON DELETE RESTRICT,
     CONSTRAINT fk_job_application_resume_document_id FOREIGN KEY (selected_resume_document_id)
         REFERENCES profile.resume_document(id) ON UPDATE RESTRICT ON DELETE SET NULL,
     CONSTRAINT fk_job_application_status_id FOREIGN KEY (status_id)
-        REFERENCES master_data.application_status(id) ON UPDATE RESTRICT ON DELETE RESTRICT,
-    CONSTRAINT uq_job_application_job_candidate UNIQUE (job_requirement_id, candidate_profile_id)
+        REFERENCES master_data.application_status(id) ON UPDATE RESTRICT ON DELETE RESTRICT
 );
+
+-- Partial unique index for active applications (supports re-application upon soft-deletion or cooling period)
+CREATE UNIQUE INDEX uq_job_application_active_candidate ON recruitment.job_application (job_requirement_id, candidate_profile_id) WHERE deleted_at IS NULL;
 
 -- Candidate Questionnaire Answers
 CREATE TABLE recruitment.candidate_question_answer (
@@ -1063,7 +1069,7 @@ CREATE TABLE recruitment.job_offer (
     updated_by bigint NULL,
     deleted_at timestamptz NULL,
     CONSTRAINT fk_job_offer_job_application_id FOREIGN KEY (job_application_id)
-        REFERENCES recruitment.job_application(id) ON UPDATE RESTRICT ON DELETE CASCADE,
+        REFERENCES recruitment.job_application(id) ON UPDATE RESTRICT ON DELETE RESTRICT,
     CONSTRAINT fk_job_offer_salary_currency FOREIGN KEY (salary_currency)
         REFERENCES master_data.currency(code) ON UPDATE RESTRICT ON DELETE RESTRICT,
     CONSTRAINT fk_job_offer_status_id FOREIGN KEY (status_id)
@@ -1183,6 +1189,42 @@ FOR EACH ROW EXECUTE FUNCTION enforce_append_only();
 
 CREATE TRIGGER trg_candidate_job_search_history_append_only BEFORE UPDATE OR DELETE ON recruitment.candidate_job_search_history
 FOR EACH ROW EXECUTE FUNCTION enforce_append_only();
+
+-- ----------------------------------------------------------------------------
+-- AUTOMATED PIPELINE STATUS AUDIT SYNCHRONIZATION (Single Source of Truth)
+-- Ensures job_application.status_id and application_status_history never drift
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION recruitment.sync_application_status_history()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF (OLD.status_id IS DISTINCT FROM NEW.status_id) THEN
+        INSERT INTO recruitment.application_status_history (
+            job_application_id,
+            from_status_id,
+            to_status_id,
+            changed_by_user_id,
+            changed_at,
+            reason_code,
+            notes
+        ) VALUES (
+            NEW.id,
+            OLD.status_id,
+            NEW.status_id,
+            NEW.updated_by,
+            CURRENT_TIMESTAMP,
+            'STATUS_TRANSITION',
+            'Automated state transition recorded via job application update'
+        );
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_job_application_status_sync
+AFTER UPDATE OF status_id ON recruitment.job_application
+FOR EACH ROW
+EXECUTE FUNCTION recruitment.sync_application_status_history();
+
 
 
 -- ============================================================================
@@ -1309,6 +1351,8 @@ COMMENT ON COLUMN master_data.country.name IS 'Classification: Public';
 COMMENT ON COLUMN master_data.city.name IS 'Classification: Public';
 COMMENT ON COLUMN master_data.skill.skill_name IS 'Classification: Public';
 COMMENT ON COLUMN recruitment.job_requirement.job_title IS 'Classification: Public';
+COMMENT ON COLUMN recruitment.job_requirement.job_description IS 'Classification: Public';
+COMMENT ON COLUMN recruitment.job_question.question_text IS 'Classification: Public';
 -- ============================================================
 -- Phase 1 integrity hardening
 -- Resume ownership, questionnaire answers, and job consistency
@@ -1489,5 +1533,3 @@ ON recruitment.job_questionnaire
 FOR EACH ROW
 WHEN (OLD.job_requirement_id IS DISTINCT FROM NEW.job_requirement_id)
 EXECUTE FUNCTION recruitment.check_questionnaire_job_consistency();
-COMMENT ON COLUMN recruitment.job_requirement.job_description IS 'Classification: Public';
-COMMENT ON COLUMN recruitment.job_question.question_text IS 'Classification: Public';

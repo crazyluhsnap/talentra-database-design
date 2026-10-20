@@ -1,0 +1,324 @@
+erDiagram
+    %% =========================================================================
+    %% TALENTRA DATABASE DESIGN - PHASE 1 FOUNDATION ER DIAGRAM
+    %% Conforming to Step 21 (Baseline ER and Physical Model) of Talencia Playbook
+    %% =========================================================================
+
+    %% MASTER DATA SCHEMA
+    country {
+        bigint id PK
+        char(2) iso_code_2 UK
+        char(3) iso_code_3 UK
+        varchar(100) name UK
+        varchar(10) phone_code
+        boolean is_active
+    }
+
+    state {
+        bigint id PK
+        bigint country_id FK
+        varchar(100) name
+        varchar(20) code
+        boolean is_active
+    }
+
+    city {
+        bigint id PK
+        bigint country_id FK
+        bigint state_id FK
+        varchar(100) name
+        varchar(20) postal_code
+        numeric(9,6) latitude
+        numeric(9,6) longitude
+    }
+
+    location {
+        bigint id PK
+        bigint country_id FK
+        bigint city_id FK
+        varchar(150) location_name
+    }
+
+    currency {
+        bigint id PK
+        char(3) code UK
+        varchar(50) name
+        varchar(10) symbol
+    }
+
+    language {
+        bigint id PK
+        varchar(10) code UK
+        varchar(100) name UK
+    }
+
+    skill {
+        bigint id PK
+        varchar(100) skill_name UK
+        varchar(150) normalized_name
+        boolean is_active
+    }
+
+    employment_type {
+        bigint id PK
+        varchar(50) type_name UK
+    }
+
+    work_type {
+        bigint id PK
+        varchar(50) type_name UK
+    }
+
+    application_status {
+        bigint id PK
+        varchar(30) code UK
+        varchar(50) display_name
+        integer sort_order
+    }
+
+    job_requirement_status {
+        bigint id PK
+        varchar(30) code UK
+        varchar(50) display_name
+        integer sort_order
+    }
+
+    %% CANDIDATE PROFILE SCHEMA
+    candidate_profile {
+        bigint id PK
+        bigint user_id UK
+        varchar(150) full_name
+        date date_of_birth
+        varchar(250) headline
+        varchar(2000) summary
+        bigint country_id FK
+        bigint city_id FK
+        numeric(4,1) years_experience
+        numeric(5,2) profile_completion_percentage
+        varchar(30) profile_visibility_code
+        timestamptz deleted_at
+    }
+
+    candidate_contact {
+        bigint id PK
+        bigint candidate_profile_id FK
+        varchar(254) email
+        varchar(30) phone
+        varchar(10) phone_country_code
+        timestamptz deleted_at
+    }
+
+    candidate_education {
+        bigint id PK
+        bigint candidate_profile_id FK
+        bigint education_level_id FK
+        bigint qualification_id FK
+        varchar(200) institution_name
+        date start_date
+        date end_date
+        numeric(6,2) grade_value
+        boolean is_current
+    }
+
+    candidate_work_experience {
+        bigint id PK
+        bigint candidate_profile_id FK
+        varchar(200) company_name
+        varchar(200) job_title
+        bigint employment_type_id FK
+        date start_date
+        date end_date
+        boolean is_current
+    }
+
+    candidate_skill {
+        bigint id PK
+        bigint candidate_profile_id FK
+        bigint skill_id FK
+        bigint proficiency_level_id FK
+        numeric(4,1) years_used
+    }
+
+    candidate_language {
+        bigint id PK
+        bigint candidate_profile_id FK
+        bigint language_id FK
+        bigint proficiency_level_id FK
+    }
+
+    profile_project {
+        bigint id PK
+        bigint candidate_profile_id FK
+        varchar(200) project_title
+        varchar(150) role_name
+        date start_date
+        date end_date
+        varchar(2000) outcome_summary
+    }
+
+    resume_document {
+        bigint id PK
+        bigint candidate_profile_id FK
+        integer version_number
+        varchar(150) title
+        varchar(500) file_uri
+        bigint file_size_bytes
+        text resume_body
+        boolean is_primary
+    }
+
+    candidate_preference {
+        bigint id PK
+        bigint candidate_profile_id FK
+        bigint job_role_id FK
+        bigint location_id FK
+        numeric(14,2) minimum_salary
+        char(3) salary_currency
+    }
+
+    %% RECRUITMENT SCHEMA
+    job_requirement {
+        bigint id PK
+        bigint organisation_id
+        varchar(200) job_title
+        text job_description
+        bigint employment_type_id FK
+        bigint work_type_id FK
+        bigint country_id FK
+        bigint city_id FK
+        integer positions_count
+        numeric(14,2) min_salary
+        numeric(14,2) max_salary
+        char(3) currency_code FK
+        bigint status_id FK
+        boolean is_open_to_consultants
+        timestamptz published_at
+        timestamptz deleted_at
+    }
+
+    job_requirement_skill {
+        bigint id PK
+        bigint job_requirement_id FK
+        bigint skill_id FK
+        boolean is_mandatory
+        numeric(4,1) min_years_experience
+    }
+
+    job_questionnaire {
+        bigint id PK
+        bigint job_requirement_id FK
+        varchar(200) title
+        integer version_number
+        boolean is_mandatory
+    }
+
+    job_question {
+        bigint id PK
+        bigint job_questionnaire_id FK
+        varchar(1000) question_text
+        bigint question_type_id FK
+        boolean is_required
+        integer sort_order
+    }
+
+    job_question_option {
+        bigint id PK
+        bigint job_question_id FK
+        varchar(500) option_text
+        integer sort_order
+    }
+
+    job_application {
+        bigint id PK
+        bigint job_requirement_id FK
+        bigint candidate_profile_id FK
+        bigint selected_resume_document_id FK
+        bigint status_id FK
+        varchar(30) source_code
+        timestamptz applied_at
+        timestamptz deleted_at
+    }
+
+    candidate_question_answer {
+        bigint id PK
+        bigint job_application_id FK
+        bigint job_question_id FK
+        bigint selected_option_id FK
+        varchar(4000) answer_text
+    }
+
+    application_status_history {
+        bigint id PK
+        bigint job_application_id FK
+        bigint from_status_id FK
+        bigint to_status_id FK
+        bigint changed_by_user_id
+        timestamptz changed_at
+        varchar(50) reason_code
+    }
+
+    job_interview {
+        bigint id PK
+        bigint job_application_id FK
+        bigint interview_type_id FK
+        bigint status_id FK
+        integer interview_round
+        varchar(30) mode_code
+        timestamptz scheduled_at
+        timestamptz completed_at
+    }
+
+    interview_feedback {
+        bigint id PK
+        bigint job_interview_id FK
+        bigint interviewer_user_id
+        smallint technical_rating
+        smallint communication_rating
+        smallint problem_solving_rating
+        numeric(3,1) overall_rating
+        varchar(30) recommendation_code
+        varchar(4000) feedback_text
+    }
+
+    job_offer {
+        bigint id PK
+        bigint job_application_id FK
+        numeric(14,2) salary_amount
+        char(3) salary_currency
+        bigint status_id FK
+        timestamptz offered_at
+        timestamptz expires_at
+    }
+
+    %% RELATIONSHIPS & CARDINALITIES
+    country ||--o{ state : "contains"
+    country ||--o{ city : "contains"
+    state ||--o{ city : "contains"
+    city ||--o{ location : "contains"
+
+    candidate_profile ||--o| candidate_contact : "has contact"
+    candidate_profile ||--o{ candidate_education : "has education"
+    candidate_profile ||--o{ candidate_work_experience : "has experience"
+    candidate_profile ||--o{ candidate_skill : "has skill"
+    candidate_profile ||--o{ candidate_language : "speaks"
+    candidate_profile ||--o{ profile_project : "showcases"
+    candidate_profile ||--o{ resume_document : "uploads"
+    candidate_profile ||--o{ candidate_preference : "specifies"
+
+    skill ||--o{ candidate_skill : "mapped to"
+    language ||--o{ candidate_language : "mapped to"
+
+    job_requirement ||--o{ job_requirement_skill : "demands"
+    skill ||--o{ job_requirement_skill : "demanded by"
+    job_requirement ||--o{ job_questionnaire : "has questionnaire"
+    job_questionnaire ||--o{ job_question : "contains"
+    job_question ||--o{ job_question_option : "has options"
+
+    job_requirement ||--o{ job_application : "receives"
+    candidate_profile ||--o{ job_application : "submits"
+    job_application ||--o{ candidate_question_answer : "answers"
+    job_question ||--o{ candidate_question_answer : "answered by"
+    job_application ||--o{ application_status_history : "records transitions"
+    job_application ||--o{ job_interview : "scheduled for"
+    job_interview ||--o{ interview_feedback : "evaluated by"
+    job_application ||--o{ job_offer : "awarded"

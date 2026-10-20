@@ -285,7 +285,7 @@ CROSS JOIN master_data.city ct
 WHERE cp.full_name = 'Aarav Sharma'
   AND c.iso_code_2 = 'IN'
   AND ct.name = 'Bengaluru'
-ON CONFLICT (email) DO NOTHING;
+ON CONFLICT (email) WHERE deleted_at IS NULL DO NOTHING;
 
 INSERT INTO profile.candidate_education
     (candidate_profile_id, education_level_id, qualification_id, institution_name, qualification, field_of_study, start_date, end_date, grade_value, grade_scale, is_current)
@@ -533,7 +533,7 @@ CROSS JOIN master_data.application_status st
 WHERE jr.job_title = 'Principal PostgreSQL Database Architect'
   AND cp.full_name = 'Aarav Sharma'
   AND st.code = 'interview'
-ON CONFLICT (job_requirement_id, candidate_profile_id) DO NOTHING;
+ON CONFLICT (job_requirement_id, candidate_profile_id) WHERE deleted_at IS NULL DO NOTHING;
 
 INSERT INTO recruitment.candidate_question_answer (job_application_id, job_question_id, selected_option_id, answer_text)
 SELECT ja.id, jq.id, opt.id, '5+ years with large-scale relational systems'
