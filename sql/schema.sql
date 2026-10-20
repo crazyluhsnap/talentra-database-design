@@ -1533,3 +1533,7 @@ ON recruitment.job_questionnaire
 FOR EACH ROW
 WHEN (OLD.job_requirement_id IS DISTINCT FROM NEW.job_requirement_id)
 EXECUTE FUNCTION recruitment.check_questionnaire_job_consistency();
+
+-- High-Performance Full-Text & Trigram Fuzzy Search (Rule Group 8)
+CREATE INDEX idx_job_requirement_title_trgm ON recruitment.job_requirement USING gin (job_title gin_trgm_ops);
+

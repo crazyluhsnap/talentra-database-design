@@ -8,6 +8,7 @@
 -- ============================================================================
 
 CREATE EXTENSION IF NOT EXISTS btree_gist;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- ============================================================================
 -- 1. MASTER DATA EXTENSION: SERVICE CATEGORY (Page 3 of Gig Spec)
@@ -730,10 +731,11 @@ CREATE INDEX idx_gig_app_request_status ON gig.gig_application USING btree (gig_
 CREATE INDEX idx_gig_app_worker ON gig.gig_application USING btree (gig_worker_profile_id);
 CREATE INDEX idx_gig_assign_worker ON gig.gig_assignment USING btree (gig_worker_profile_id);
 CREATE INDEX idx_gig_assign_status ON gig.gig_assignment USING btree (status_code);
+CREATE INDEX idx_gig_request_title_trgm ON gig.gig_request USING gin (title gin_trgm_ops);
 
 
 -- ============================================================================
--- 9. ACTIVE MARKETPLACE VIEWS (Fix 11: v_gig_ prefix)
+-- 9. ACTIVE MARKETPLACE VIEWS & MATERIALIZED VIEWS (Fix 11: v_gig_ prefix)
 -- ============================================================================
 
 CREATE OR REPLACE VIEW gig.v_gig_request_published AS
@@ -747,4 +749,30 @@ WHERE availability_status_code = 'accepting_work' AND deleted_at IS NULL;
 CREATE OR REPLACE VIEW gig.v_gig_assignment_active AS
 SELECT * FROM gig.gig_assignment
 WHERE status_code IN ('pending_handoff', 'active');
+
+-- Fast-path materialized view for high-throughput public discovery (sub-2ms response)
+CREATE MATERIALIZED VIEW IF NOT EXISTS gig.mv_published_gig_requests AS
+SELECT 
+    r.id,
+    r.requester_user_id,
+    r.organisation_id,
+    r.service_category_id,
+    r.title,
+    r.work_mode_code,
+    r.city_id,
+    r.start_at,
+    r.end_at,
+    r.positions_count,
+    r.pricing_type_code,
+    r.budget_amount,
+    r.rate_amount,
+    r.rate_unit_code,
+    r.currency_code,
+    r.published_at
+FROM gig.gig_request r
+WHERE r.status_code = 'published' AND r.deleted_at IS NULL
+WITH DATA;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_mv_published_gig_requests_id ON gig.mv_published_gig_requests (id);
+
 

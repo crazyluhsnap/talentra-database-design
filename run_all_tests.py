@@ -115,6 +115,13 @@ def parse_functions_and_triggers(sql_content):
         })
     return functions, triggers
 
+def parse_materialized_views(sql_content):
+    mv_pattern = re.compile(
+        r'CREATE\s+MATERIALIZED\s+VIEW\s+(?:IF NOT EXISTS\s+)?([a-zA-Z0-9_\.]+)',
+        re.IGNORECASE
+    )
+    return set(m.group(1).lower() for m in mv_pattern.finditer(sql_content))
+
 def run_tests():
     print("=" * 80)
     print("TALENTRA ARCHITECTURE & MULTI-MODULE REGRESSION VERIFICATION ENGINE")
@@ -141,6 +148,7 @@ def run_tests():
     tables = parse_tables(combined_ddl)
     indexes = parse_indexes(combined_ddl)
     functions, triggers = parse_functions_and_triggers(combined_ddl)
+    mat_views = parse_materialized_views(combined_ddl)
 
     print(f"\n[SECTION 1: STRUCTURAL INVENTORY]")
     print(f"  * Total Tables Defined:      {len(tables)}")
@@ -221,6 +229,8 @@ def run_tests():
     missing_idx_cols = []
     for idx in indexes:
         t_name = idx['table']
+        if t_name in mat_views:
+            continue
         if t_name not in tables:
             missing_idx_cols.append(f"Index {idx['name']} targets nonexistent table {t_name}")
             continue

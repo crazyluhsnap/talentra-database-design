@@ -574,6 +574,42 @@ CREATE TRIGGER trg_protect_last_super_admin_account
 BEFORE UPDATE OF account_status_code, deleted_at OR DELETE ON administration.user_account
 FOR EACH ROW EXECUTE FUNCTION administration.protect_last_super_admin();
 
+-- ============================================================================
+-- SESSION CONTEXT HELPER FUNCTION (Security & Forensic Audit)
+-- Atomically initiates transaction context with actor, request UUID, and IP.
+-- ============================================================================
+CREATE OR REPLACE FUNCTION administration.fn_begin_session(
+    p_user_id bigint,
+    p_request_id uuid DEFAULT NULL,
+    p_client_ip inet DEFAULT NULL,
+    p_change_reason text DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+    IF p_user_id IS NULL THEN
+        RAISE EXCEPTION 'Session user_id cannot be null' USING ERRCODE = '28000';
+    END IF;
+
+    PERFORM set_config('app.current_user_id', p_user_id::text, true);
+
+    IF p_request_id IS NOT NULL THEN
+        PERFORM set_config('app.request_id', p_request_id::text, true);
+    END IF;
+
+    IF p_client_ip IS NOT NULL THEN
+        PERFORM set_config('app.client_ip', p_client_ip::text, true);
+    END IF;
+
+    IF p_change_reason IS NOT NULL THEN
+        PERFORM set_config('app.change_reason', p_change_reason, true);
+    END IF;
+END;
+$$;
+
+
 
 -- ============================================================================
 -- HIGH-PERFORMANCE ACCESS PATHS & INDEXES (B33)

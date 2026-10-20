@@ -9,6 +9,7 @@
 
 CREATE EXTENSION IF NOT EXISTS btree_gist;
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 CREATE SCHEMA IF NOT EXISTS organisation;
 
@@ -655,6 +656,25 @@ BEGIN
 END;
 $$;
 
+-- Dynamic partition maintainer function (Enterprise Automation)
+CREATE OR REPLACE FUNCTION organisation.fn_maintain_audit_partitions(p_months_ahead integer DEFAULT 3)
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+    v_target date;
+    v_created integer := 0;
+BEGIN
+    FOR i IN 0..p_months_ahead LOOP
+        v_target := (date_trunc('month', CURRENT_DATE) + (i || ' month')::interval)::date;
+        PERFORM organisation.fn_create_audit_event_partition(v_target);
+        v_created := v_created + 1;
+    END LOOP;
+    RETURN v_created;
+END;
+$$;
+
 
 -- ============================================================================
 -- 4. AUTOMATED TRIGGERS & INTEGRITY PROCEDURES
@@ -1028,6 +1048,7 @@ $$;
 -- ============================================================================
 
 CREATE INDEX idx_organisation_name ON organisation.organisation USING btree (lower(organisation_name));
+CREATE INDEX idx_organisation_name_trgm ON organisation.organisation USING gin (organisation_name gin_trgm_ops);
 CREATE INDEX idx_organisation_status ON organisation.organisation USING btree (organisation_status_id);
 CREATE INDEX idx_account_administrator_user ON organisation.account_administrator USING btree (app_user_id);
 CREATE INDEX idx_org_recruiter_user ON organisation.organisation_recruiter USING btree (app_user_id);
