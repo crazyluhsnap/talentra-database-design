@@ -6,7 +6,9 @@ def inspect():
         'sql/schema.sql',
         'sql/phase2_administration.sql',
         'sql/phase2_organisation.sql',
-        'sql/phase2_gig_marketplace.sql'
+        'sql/phase2_gig_marketplace.sql',
+        'sql/phase3_sourcing.sql',
+        'sql/phase3_billing_subscriptions.sql'
     ]
     all_sql = ""
     for file_path in sql_files:
@@ -24,7 +26,7 @@ def inspect():
     tables = table_pattern.findall(all_sql)
 
     print("=" * 70)
-    print("TALENTRA DATABASE SCHEMA INSPECTOR (PHASE 1 + PHASE 2)")
+    print("TALENTRA DATABASE SCHEMA INSPECTOR (FULL PHASE 1, 2 & 3)")
     print("=" * 70)
     print(f"Schemas Defined ({len(schemas)}): {', '.join(schemas)}")
     print(f"Total Tables Created in DDL: {len(tables)}\n")

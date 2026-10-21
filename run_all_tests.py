@@ -1,11 +1,14 @@
 """
 Talentra Enterprise Database Architecture & Multi-Module Verification Engine
 Validates:
-1. Master Data, Profile, Recruitment (Phase 1 Foundation - 54 tables)
+1. Master Data, Profile, Recruitment (Phase 1 Foundation - 55 tables)
 2. Administration & Identity (Phase 2 - 17 tables)
 3. Organisation & Account with Audit Trail (Phase 2 - 24 tables)
 4. Gig Marketplace Subsystem (Phase 2 - 27 tables)
-Total: 122 tables, 111 indexes, 68 triggers across 6 domain schemas.
+5. Sourcing & Consultant Requests (Phase 3 Module A - 13 tables)
+6. Licences (Phase 3 Anchor - 1 table)
+7. Subscriptions, Wallet, Payments & Download History (Phase 3 Module B - 31 tables)
+Total: 168 tables, 143 indexes, 111 triggers across 8 domain schemas.
 """
 
 import re
@@ -132,18 +135,24 @@ def run_tests():
     schema_admin = (sql_dir / "phase2_administration.sql").read_text(encoding="utf-8")
     schema_org = (sql_dir / "phase2_organisation.sql").read_text(encoding="utf-8")
     schema_gig = (sql_dir / "phase2_gig_marketplace.sql").read_text(encoding="utf-8")
+    schema_src = (sql_dir / "phase3_sourcing.sql").read_text(encoding="utf-8")
+    schema_sub = (sql_dir / "phase3_billing_subscriptions.sql").read_text(encoding="utf-8")
     
     seed_p1 = (sql_dir / "seed.sql").read_text(encoding="utf-8")
     seed_admin = (sql_dir / "seed_administration.sql").read_text(encoding="utf-8")
     seed_org = (sql_dir / "seed_organisation.sql").read_text(encoding="utf-8")
     seed_gig = (sql_dir / "seed_gig_marketplace.sql").read_text(encoding="utf-8")
+    seed_src = (sql_dir / "seed_phase3_sourcing.sql").read_text(encoding="utf-8")
+    seed_sub = (sql_dir / "seed_phase3_billing.sql").read_text(encoding="utf-8")
 
     test_p1 = (sql_dir / "integrity_regression_test.sql").read_text(encoding="utf-8")
     test_admin = (sql_dir / "administration_regression_test.sql").read_text(encoding="utf-8")
     test_org = (sql_dir / "organisation_regression_test.sql").read_text(encoding="utf-8")
     test_gig = (sql_dir / "gig_regression_test.sql").read_text(encoding="utf-8")
+    test_src = (sql_dir / "sourcing_regression_test.sql").read_text(encoding="utf-8")
+    test_sub = (sql_dir / "billing_subscriptions_regression_test.sql").read_text(encoding="utf-8")
 
-    combined_ddl = f"{schema_p1}\n{schema_admin}\n{schema_org}\n{schema_gig}"
+    combined_ddl = f"{schema_p1}\n{schema_admin}\n{schema_org}\n{schema_gig}\n{schema_src}\n{schema_sub}"
 
     tables = parse_tables(combined_ddl)
     indexes = parse_indexes(combined_ddl)
@@ -168,22 +177,28 @@ def run_tests():
             failed += 1
             print(f"  [FAIL] {test_code}: {test_desc} -> {details}")
 
-    # Section 2: Schema Boundaries (All 6 Domain Schemas)
+    # Section 2: Schema Boundaries (All 8 Domain Schemas)
     print("\n[SECTION 2: MULTI-MODULE SCHEMA BOUNDARY VALIDATION]")
     schemas = set(t.split('.')[0] for t in tables.keys())
-    assert_true("CHK-001", "All 6 Core Schemas Present (master_data, profile, recruitment, administration, organisation, gig)",
-                schemas == {'master_data', 'profile', 'recruitment', 'administration', 'organisation', 'gig'},
+    assert_true("CHK-001", "All 8 Core Schemas Present (master_data, profile, recruitment, administration, organisation, gig, sourcing, billing/licence)",
+                schemas == {'master_data', 'profile', 'recruitment', 'administration', 'organisation', 'gig', 'sourcing', 'licence', 'billing'},
                 f"Found schemas: {schemas}")
     
     admin_tbl_count = len([t for t in tables if t.startswith('administration.')])
     org_tbl_count = len([t for t in tables if t.startswith('organisation.')])
     gig_tbl_count = len([t for t in tables if t.startswith('gig.')])
+    sourcing_tbl_count = len([t for t in tables if t.startswith('sourcing.')])
+    billing_tbl_count = len([t for t in tables if t.startswith('billing.')])
+    licence_tbl_count = len([t for t in tables if t.startswith('licence.')])
     
     assert_true("CHK-002", "Administration Module Table Count (17 Tables)", admin_tbl_count == 17, f"Count: {admin_tbl_count}")
     assert_true("CHK-003", "Organisation Module Table Count (24 Tables per Revised v2 Spec)", org_tbl_count == 24, f"Count: {org_tbl_count}")
     assert_true("CHK-004", "Gig Marketplace Table Count (27 Tables per v3 Spec)", gig_tbl_count == 27, f"Count: {gig_tbl_count}")
+    assert_true("CHK-005", "Sourcing Module Table Count (13 Tables per Phase 3 Spec)", sourcing_tbl_count == 13, f"Count: {sourcing_tbl_count}")
+    assert_true("CHK-006", "Subscriptions & Wallet Table Count (31 Tables per Phase 3 Spec)", billing_tbl_count == 31, f"Count: {billing_tbl_count}")
+    assert_true("CHK-007", "Licence Anchor Table Count (1 Table)", licence_tbl_count == 1, f"Count: {licence_tbl_count}")
 
-    # Section 3: Organisation & Account Invariants
+    # Section 3: Organisation & Tenancy Invariants
     print("\n[SECTION 3: ORGANISATION & TENANCY INVARIANTS]")
     assert_true("ORG-001", "One live headquarters per organisation partial unique index",
                 any(i['name'] == 'uq_organisation_location_headquarters' for i in indexes))
@@ -207,8 +222,34 @@ def run_tests():
     assert_true("GIG-004", "master_data.service_category table defined and accessible",
                 'master_data.service_category' in tables)
 
-    # Section 5: Foreign Key Cross-Reference Integrity
-    print("\n[SECTION 5: FOREIGN KEY REFERENTIAL INTEGRITY]")
+    # Section 5: Phase 3 Module A (Sourcing) Invariants
+    print("\n[SECTION 5: SOURCING & CONSULTANT REQUESTS INVARIANTS]")
+    assert_true("SRC-001", "Sourcing request consultant guard trigger defined",
+                any(t['name'] == 'trg_sourcing_request_guard' for t in triggers))
+    assert_true("SRC-002", "Sourcing request decision sync trigger defined",
+                any(t['name'] == 'trg_sourcing_request_decision_sync' for t in triggers))
+    assert_true("SRC-003", "Sourcing shortlist provenance guard trigger defined",
+                any(t['name'] == 'trg_shortlist_source_type_guard' for t in triggers))
+    assert_true("SRC-004", "Sourcing request decision append-only trigger defined",
+                any(t['name'] == 'trg_sourcing_request_decision_append_only' for t in triggers))
+
+    # Section 6: Phase 3 Module B (Subscriptions & Wallet) Invariants
+    print("\n[SECTION 6: SUBSCRIPTIONS & WALLET INVARIANTS]")
+    assert_true("SUB-001", "Plan price effective range EXCLUDE constraint defined",
+                'ex_plan_price_range' in tables['billing.plan_price']['body'])
+    assert_true("SUB-002", "Subscription period non-overlapping EXCLUDE constraint defined",
+                'ex_subscription_period_range' in tables['billing.subscription_period']['body'])
+    assert_true("SUB-003", "Credit tariff range EXCLUDE constraint defined",
+                'ex_credit_tariff_range' in tables['billing.credit_tariff']['body'])
+    assert_true("SUB-004", "Refund cumulative cap validation trigger defined",
+                any(t['name'] == 'trg_refund_cap' for t in triggers))
+    assert_true("SUB-005", "Wallet balance cache sync trigger defined",
+                any(t['name'] == 'trg_wallet_balance_cache_sync' for t in triggers))
+    assert_true("SUB-006", "Wallet ledger append-only trigger defined",
+                any(t['name'] == 'trg_wallet_ledger_append_only' for t in triggers))
+
+    # Section 7: Foreign Key Cross-Reference Integrity
+    print("\n[SECTION 7: FOREIGN KEY REFERENTIAL INTEGRITY]")
     fk_pattern = re.compile(r'REFERENCES\s+([a-zA-Z0-9_\.]+)\s*\(([a-zA-Z0-9_]+)\)', re.IGNORECASE)
     all_fks = fk_pattern.findall(combined_ddl)
     missing_fk_targets = []
@@ -224,8 +265,8 @@ def run_tests():
                 len(missing_fk_targets) == 0,
                 f"Issues: {missing_fk_targets[:3]}")
 
-    # Section 6: Index Target Column Verification
-    print("\n[SECTION 6: INDEX TARGET COLUMN VERIFICATION]")
+    # Section 8: Index Target Column Verification
+    print("\n[SECTION 8: INDEX TARGET COLUMN VERIFICATION]")
     missing_idx_cols = []
     for idx in indexes:
         t_name = idx['table']
@@ -257,17 +298,21 @@ def run_tests():
                 len(missing_idx_cols) == 0,
                 f"Issues: {missing_idx_cols[:3]}")
 
-    # Section 7: Seed Data Verification
-    print("\n[SECTION 7: MULTI-MODULE SEED VERIFICATION]")
+    # Section 9: Seed Data Verification
+    print("\n[SECTION 9: MULTI-MODULE SEED VERIFICATION]")
     assert_true("SEED-001", "Organisation seed contains TechCorp Global (id=5001) & Account (id=6001)",
                 '5001' in seed_org and 'TechCorp Global' in seed_org and '6001' in seed_org)
     assert_true("SEED-002", "Gig Marketplace seed contains Service Categories & Lookups",
                 'software_engineering' in seed_gig and 'fixed_price' in seed_gig)
     assert_true("SEED-003", "Gig Marketplace seed contains Aarav Sharma Worker Profile (7001)",
                 '7001' in seed_gig and 'Aarav Sharma' in seed_admin)
+    assert_true("SEED-004", "Sourcing seed contains Sourcing Request Statuses & Fixture",
+                'pending' in seed_src and 'accepted' in seed_src and 'Q4 Senior Cloud Architect' in seed_src)
+    assert_true("SEED-005", "Subscriptions & Wallet seed contains Plans, Features, and Account 6001 Subscription",
+                'growth_plan' in seed_sub and 'profile_download' in seed_sub and 'LIC-TAL-ENTERPRISE-001' in seed_sub)
 
-    # Section 8: Regression Suites
-    print("\n[SECTION 8: REGRESSION TEST SUITE VERIFICATION]")
+    # Section 10: Regression Suites
+    print("\n[SECTION 10: REGRESSION TEST SUITE VERIFICATION]")
     adm_tests = [f"ADM-{i:03d}" for i in range(1, 31)]
     missing_adm_tests = [t for t in adm_tests if t not in test_admin]
     assert_true("REG-ADM", "All 30 Administration Test Scenarios Codified (ADM-001..30)",
@@ -292,8 +337,20 @@ def run_tests():
                 len(missing_gig_tests) == 0,
                 f"Missing tests: {missing_gig_tests}")
 
-    # Section 9: Zero Duplication & Clean Architecture Audit
-    print("\n[SECTION 9: ZERO DUPLICATION & CLEAN ARCHITECTURE AUDIT]")
+    src_tests = [f"SRC-{i:03d}" for i in range(1, 14)]
+    missing_src_tests = [t for t in src_tests if t not in test_src]
+    assert_true("REG-SRC", "All 13 Sourcing Regression Assertions Codified (SRC-001..13)",
+                len(missing_src_tests) == 0,
+                f"Missing tests: {missing_src_tests}")
+
+    sub_tests = [f"SUB-{i:03d}" for i in range(1, 14)]
+    missing_sub_tests = [t for t in sub_tests if t not in test_sub]
+    assert_true("REG-SUB", "All 13 Subscriptions & Wallet Regression Assertions Codified (SUB-001..13)",
+                len(missing_sub_tests) == 0,
+                f"Missing tests: {missing_sub_tests}")
+
+    # Section 11: Zero Duplication & Clean Architecture Audit
+    print("\n[SECTION 11: ZERO DUPLICATION & CLEAN ARCHITECTURE AUDIT]")
     from collections import Counter
     all_table_names = [t.lower() for t in tables.keys()]
     dup_tbls = [t for t, cnt in Counter(all_table_names).items() if cnt > 1]
