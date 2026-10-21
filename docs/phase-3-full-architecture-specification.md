@@ -103,6 +103,9 @@ erDiagram
     ORGANISATION_ACCOUNT ||--o{ LICENCE : owns
     ORGANISATION_ACCOUNT ||--o{ ACCOUNT_SUBSCRIPTION : holds
     LICENCE ||--o{ ACCOUNT_SUBSCRIPTION : binds
+    LICENCE ||--o{ SEAT_ASSIGNMENT : allocates
+    SEAT_ASSIGNMENT ||--o{ REGISTERED_DEVICE : authorizes
+    SEAT_ASSIGNMENT ||--o{ SEAT_ALLOCATION_HISTORY : audits
     SUBSCRIPTION_PLAN ||--o{ PLAN_PRICE : prices
     SUBSCRIPTION_PLAN ||--o{ PLAN_ENTITLEMENT : grants
     FEATURE ||--o{ PLAN_ENTITLEMENT : defines
@@ -127,16 +130,19 @@ erDiagram
     OUTREACH_RECIPIENT ||--o| OUTREACH_CREDIT_CONSUMPTION : charged
 ```
 
-### 4.3 Entity Catalog (32 Tables)
+### 4.3 Entity Catalog (35 Tables: 4 Licence + 31 Billing)
 
 | # | Entity | Schema | Type | Description / Architectural Invariants |
 | :-: | :--- | :---: | :---: | :--- |
 | 1 | `licence` | `licence` | Core | Cross-module tenant software license anchor (`account_id`, `licence_key UNIQUE`). |
-| 2–12 | 11 Lookups | `billing` | Lookups | `billing_interval`, `entitlement_reset_period`, `subscription_status`, `subscription_event_type`, `order_purpose`, `payment_status`, `refund_status`, `refund_reason`, `invoice_status`, `ledger_entry_type`, `download_outcome`. |
-| 13 | `subscription_plan` | `billing` | Master | Commercial plan master (`code UNIQUE`, `name_key`, `billing_interval_id`). |
-| 14 | `plan_price` | `billing` | Core | Effective-dated price per currency with `ex_plan_price_range EXCLUDE USING gist (subscription_plan_id WITH =, currency_code WITH =, valid_range WITH &&)`. |
-| 15 | `feature` | `billing` | Master | Entitled actions catalog (`profile_download`, `candidate_outreach`). |
-| 16 | `plan_entitlement` | `billing` | Core | Quota of feature granted by plan (`null` = unlimited, `0` = none). |
+| 2 | `seat_assignment` | `licence` | Core | Named user recruiter seat assignment (`idx_seat_assignment_active_user` partial unique index, `trg_enforce_seat_cap`). |
+| 3 | `registered_device` | `licence` | Core | Authorized hardware device tokens (`idx_registered_device_active_fingerprint` with SHA-256 binary hash). |
+| 4 | `seat_allocation_history` | `licence` | Append-Only | Immutable audit stream of seat grants, revocations, and transfers guarded by `enforce_append_only()`. |
+| 5–15 | 11 Lookups | `billing` | Lookups | `billing_interval`, `entitlement_reset_period`, `subscription_status`, `subscription_event_type`, `order_purpose`, `payment_status`, `refund_status`, `refund_reason`, `invoice_status`, `ledger_entry_type`, `download_outcome`. |
+| 16 | `subscription_plan` | `billing` | Master | Commercial plan master (`code UNIQUE`, `name_key`, `billing_interval_id`). |
+| 17 | `plan_price` | `billing` | Core | Effective-dated price per currency with `ex_plan_price_range EXCLUDE USING gist (subscription_plan_id WITH =, currency_code WITH =, valid_range WITH &&)`. |
+| 18 | `feature` | `billing` | Master | Entitled actions catalog (`profile_download`, `candidate_outreach`, `recruiter_seats`). |
+| 19 | `plan_entitlement` | `billing` | Core | Quota of feature granted by plan (`null` = unlimited, `0` = none). |
 | 17 | `credit_tariff` | `billing` | Core | Cost of feature units in platform credits with `ex_credit_tariff_range EXCLUDE USING gist`. |
 | 18 | `account_subscription` | `billing` | Core | Tenant subscription contract (`account_id`, `licence_id`, `subscription_plan_id`). |
 | 19 | `subscription_period` | `billing` | Core | Continuous billing cycle with `ex_subscription_period_range EXCLUDE USING gist (licence_id WITH =, valid_range WITH &&) WHERE (cancelled_at IS NULL)`. |
@@ -167,17 +173,17 @@ erDiagram
 | `organisation` | Phase 2 | **24** | 22 | 26 | Multi-tenancy, recruiter seats, branches, KYC, monthly partitioned audit trails |
 | `gig` | Phase 2 | **27** | 19 | 16 | Freelance catalog, worker availability, gig requests, bids, milestones, reviews |
 | `sourcing` | Phase 3 | **13** | 9 | 10 | Consultant sourcing requests, decisions, outreach batches, shortlist provenance |
-| `licence` | Phase 3 | **1** | 1 | 2 | Cross-module tenant license anchor |
+| `licence` | Phase 3 | **4** | 8 | 8 | Cross-module tenant license anchor, named recruiter seat quotas, device security, audit history |
 | `billing` | Phase 3 | **31** | 11 | 24 | Plans, prices, exclusion periods, payments, refunds, invoices, credit wallet |
-| **Total** | **All 8 Schemas** | **168 Tables** | **187 Indexes** | **112 Triggers** | **100% PRD & DDD Compliant (0 Gaps)** |
+| **Total** | **All 8 Schemas** | **171 Tables** | **194 Indexes** | **118 Triggers** | **100% PRD & DDD Compliant (0 Gaps)** |
 
 ---
 
 ## 6. Verification Results
 
-All 44 automated verification suites pass with **100.0% score**:
+All 48 automated verification suites pass with **100.0% score**:
 ```bash
 python run_all_tests.py
-# Result: 44 PASSED | 0 FAILED | SCORE: 100.0%
+# Result: 48 PASSED | 0 FAILED | SCORE: 100.0%
 ```
-*(Validates zero duplication across 168 tables and 187 indexes, referential integrity, exclusion constraints, triggers, and all regression suites).*
+*(Validates zero duplication across 171 tables and 194 indexes, referential integrity, exclusion constraints, triggers, and all regression suites).*

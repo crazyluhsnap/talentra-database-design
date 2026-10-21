@@ -38,10 +38,13 @@ DECLARE
     v_wallet_ledger_id bigint;
     v_event_id bigint;
     v_usage_id bigint;
+    v_seat_id bigint;
+    v_dev_id bigint;
+    v_history_id bigint;
     v_mrr_rows integer;
     v_bad boolean := false;
 BEGIN
-    RAISE NOTICE '>>> RUNNING PHASE 3 MODULE B (SUBSCRIPTIONS & WALLET) REGRESSION SUITE...';
+    RAISE NOTICE '>>> RUNNING PHASE 3 MODULE B (SUBSCRIPTIONS, LICENSING & WALLET) REGRESSION SUITE...';
 
     -- Discover Fixtures
     SELECT id INTO v_admin_id FROM administration.user_account ORDER BY id LIMIT 1;
@@ -329,7 +332,47 @@ BEGIN
     SELECT COUNT(*) INTO v_mrr_rows FROM billing.v_monthly_recurring_revenue_kpi;
     RAISE NOTICE 'SUB-013 PASSED: Executive MRR & ARR KPI aggregation view verified (% rows computed)', v_mrr_rows;
 
-    RAISE NOTICE '>>> ALL 13 SUBSCRIPTION & WALLET REGRESSION TEST SCENARIOS PASSED!';
+    -- SUB-014: Seat assignment creation and automatic audit logging
+    INSERT INTO licence.seat_assignment (
+        licence_id, user_account_id, assigned_by, is_active, created_by, updated_by
+    )
+    VALUES (
+        v_licence_id, v_admin_id, v_admin_id, true, v_admin_id, v_admin_id
+    )
+    RETURNING id INTO v_seat_id;
+
+    SELECT id INTO v_history_id 
+    FROM licence.seat_allocation_history 
+    WHERE seat_assignment_id = v_seat_id AND action_type = 'assigned';
+
+    IF v_history_id IS NULL THEN
+        RAISE EXCEPTION 'SUB-014 FAILED: Seat assignment failed to automatically log to seat_allocation_history';
+    END IF;
+    RAISE NOTICE 'SUB-014 PASSED: Seat assignment created and logged to audit trail (history_id=%)', v_history_id;
+
+    -- SUB-015: Registered device creation with SHA-256 fingerprint hash
+    INSERT INTO licence.registered_device (
+        seat_assignment_id, device_fingerprint_hash, device_name, operating_system,
+        is_trusted, created_by, updated_by
+    )
+    VALUES (
+        v_seat_id, sha256('regression_test_device_hash'::bytea), 'Test Recruiter Laptop', 'Windows 11',
+        true, v_admin_id, v_admin_id
+    )
+    RETURNING id INTO v_dev_id;
+    RAISE NOTICE 'SUB-015 PASSED: Hardware device registered with SHA-256 fingerprint (dev_id=%)', v_dev_id;
+
+    -- SUB-016: Seat allocation history append-only immutability
+    BEGIN
+        v_bad := false;
+        DELETE FROM licence.seat_allocation_history WHERE id = v_history_id;
+        v_bad := true;
+    EXCEPTION WHEN raise_exception THEN NULL;
+    END;
+    IF v_bad THEN RAISE EXCEPTION 'SUB-016 FAILED: Seat allocation history delete permitted on append-only table'; END IF;
+    RAISE NOTICE 'SUB-016 PASSED: Seat allocation history append-only immutability verified';
+
+    RAISE NOTICE '>>> ALL 16 SUBSCRIPTION & LICENSING REGRESSION TEST SCENARIOS PASSED!';
 END $$;
 
 ROLLBACK;

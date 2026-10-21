@@ -196,7 +196,7 @@ def run_tests():
     assert_true("CHK-004", "Gig Marketplace Table Count (27 Tables per v3 Spec)", gig_tbl_count == 27, f"Count: {gig_tbl_count}")
     assert_true("CHK-005", "Sourcing Module Table Count (13 Tables per Phase 3 Spec)", sourcing_tbl_count == 13, f"Count: {sourcing_tbl_count}")
     assert_true("CHK-006", "Subscriptions & Wallet Table Count (31 Tables per Phase 3 Spec)", billing_tbl_count == 31, f"Count: {billing_tbl_count}")
-    assert_true("CHK-007", "Licence Anchor Table Count (1 Table)", licence_tbl_count == 1, f"Count: {licence_tbl_count}")
+    assert_true("CHK-007", "Licence Module Table Count (4 Tables: licence, seat_assignment, registered_device, seat_allocation_history)", licence_tbl_count == 4, f"Count: {licence_tbl_count}")
 
     # Section 3: Organisation & Tenancy Invariants
     print("\n[SECTION 3: ORGANISATION & TENANCY INVARIANTS]")
@@ -247,6 +247,17 @@ def run_tests():
                 any(t['name'] == 'trg_wallet_balance_cache_sync' for t in triggers))
     assert_true("SUB-006", "Wallet ledger append-only trigger defined",
                 any(t['name'] == 'trg_wallet_ledger_append_only' for t in triggers))
+
+    # Section 6B: Enterprise Licensing & Seat Invariants
+    print("\n[SECTION 6B: ENTERPRISE LICENSING & SEAT INVARIANTS]")
+    assert_true("LIC-001", "Seat assignment active partial unique index defined",
+                any(i['name'] == 'idx_seat_assignment_active_user' for i in indexes))
+    assert_true("LIC-002", "Seat cap enforcement trigger defined on seat_assignment",
+                any(t['name'] == 'trg_enforce_seat_cap' for t in triggers))
+    assert_true("LIC-003", "Seat allocation history append-only trigger defined",
+                any(t['name'] == 'trg_seat_allocation_history_append_only' for t in triggers))
+    assert_true("LIC-004", "Registered device active fingerprint unique index defined",
+                any(i['name'] == 'idx_registered_device_active_fingerprint' for i in indexes))
 
     # Section 7: Foreign Key Cross-Reference Integrity
     print("\n[SECTION 7: FOREIGN KEY REFERENTIAL INTEGRITY]")
@@ -343,9 +354,9 @@ def run_tests():
                 len(missing_src_tests) == 0,
                 f"Missing tests: {missing_src_tests}")
 
-    sub_tests = [f"SUB-{i:03d}" for i in range(1, 14)]
+    sub_tests = [f"SUB-{i:03d}" for i in range(1, 17)]
     missing_sub_tests = [t for t in sub_tests if t not in test_sub]
-    assert_true("REG-SUB", "All 13 Subscriptions & Wallet Regression Assertions Codified (SUB-001..13)",
+    assert_true("REG-SUB", "All 16 Subscriptions & Licensing Regression Assertions Codified (SUB-001..16)",
                 len(missing_sub_tests) == 0,
                 f"Missing tests: {missing_sub_tests}")
 

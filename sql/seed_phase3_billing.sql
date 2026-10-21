@@ -123,6 +123,7 @@ DECLARE
     v_plan_ent_id bigint;
     v_feat_download_id bigint;
     v_feat_outreach_id bigint;
+    v_feat_seats_id bigint;
     v_account_id bigint;
     v_licence_id bigint;
     v_sub_status_active_id bigint;
@@ -130,6 +131,8 @@ DECLARE
     v_sub_id bigint;
     v_wallet_account_id bigint;
     v_ledger_recharge_id bigint;
+    v_seat_assignment_id bigint;
+    v_reset_none bigint;
 BEGIN
     SELECT id INTO v_admin_id FROM administration.user_account ORDER BY id LIMIT 1;
     SELECT code INTO v_usd FROM master_data.currency WHERE code = 'USD' LIMIT 1;
@@ -138,6 +141,7 @@ BEGIN
     SELECT id INTO v_int_monthly FROM billing.billing_interval WHERE code = 'monthly';
     SELECT id INTO v_int_annual FROM billing.billing_interval WHERE code = 'annual';
     SELECT id INTO v_reset_monthly FROM billing.entitlement_reset_period WHERE code = 'monthly';
+    SELECT id INTO v_reset_none FROM billing.entitlement_reset_period WHERE code = 'none';
     SELECT id INTO v_sub_status_active_id FROM billing.subscription_status WHERE code = 'active';
     SELECT id INTO v_ledger_recharge_id FROM billing.ledger_entry_type WHERE code = 'recharge';
 
@@ -176,18 +180,21 @@ BEGIN
         INSERT INTO billing.feature (code, name_key, is_active, created_by, updated_by)
         VALUES 
             ('profile_download', 'billing.feat.profile_download', true, v_admin_id, v_admin_id),
-            ('candidate_outreach', 'billing.feat.candidate_outreach', true, v_admin_id, v_admin_id)
+            ('candidate_outreach', 'billing.feat.candidate_outreach', true, v_admin_id, v_admin_id),
+            ('recruiter_seats', 'billing.feat.recruiter_seats', true, v_admin_id, v_admin_id)
         ON CONFLICT (code) DO NOTHING;
 
         SELECT id INTO v_feat_download_id FROM billing.feature WHERE code = 'profile_download';
         SELECT id INTO v_feat_outreach_id FROM billing.feature WHERE code = 'candidate_outreach';
+        SELECT id INTO v_feat_seats_id FROM billing.feature WHERE code = 'recruiter_seats';
 
         -- Insert Plan Entitlements
         IF v_plan_growth_id IS NOT NULL AND v_feat_download_id IS NOT NULL AND v_reset_monthly IS NOT NULL THEN
             INSERT INTO billing.plan_entitlement (subscription_plan_id, feature_id, quota, entitlement_reset_period_id, created_by, updated_by)
             VALUES 
                 (v_plan_growth_id, v_feat_download_id, 100, v_reset_monthly, v_admin_id, v_admin_id),
-                (v_plan_growth_id, v_feat_outreach_id, 500, v_reset_monthly, v_admin_id, v_admin_id)
+                (v_plan_growth_id, v_feat_outreach_id, 500, v_reset_monthly, v_admin_id, v_admin_id),
+                (v_plan_growth_id, v_feat_seats_id, 25, COALESCE(v_reset_none, v_reset_monthly), v_admin_id, v_admin_id)
             ON CONFLICT (subscription_plan_id, feature_id) DO NOTHING;
         END IF;
 
@@ -264,6 +271,38 @@ BEGIN
                         v_sub_id, v_licence_id, v_growth_price_id,
                         tstzrange(CURRENT_TIMESTAMP - interval '10 days', CURRENT_TIMESTAMP + interval '20 days', '[)'),
                         v_admin_id, v_admin_id
+                    )
+                    ON CONFLICT DO NOTHING;
+                END IF;
+
+                -- 14. Seed Active Seat Assignment & Device Registration
+                INSERT INTO licence.seat_assignment (
+                    licence_id, user_account_id, assigned_by, is_active, created_by, updated_by
+                )
+                VALUES (
+                    v_licence_id, v_admin_id, v_admin_id, true, v_admin_id, v_admin_id
+                )
+                ON CONFLICT DO NOTHING
+                RETURNING id INTO v_seat_assignment_id;
+
+                IF v_seat_assignment_id IS NULL THEN
+                    SELECT id INTO v_seat_assignment_id FROM licence.seat_assignment 
+                    WHERE licence_id = v_licence_id AND user_account_id = v_admin_id;
+                END IF;
+
+                IF v_seat_assignment_id IS NOT NULL THEN
+                    INSERT INTO licence.registered_device (
+                        seat_assignment_id, device_fingerprint_hash, device_name,
+                        operating_system, is_trusted, created_by, updated_by
+                    )
+                    VALUES (
+                        v_seat_assignment_id,
+                        sha256('seed_device_admin_workstation'::bytea),
+                        'Admin Corporate Workstation',
+                        'macOS 14.5 (Sonoma)',
+                        true,
+                        v_admin_id,
+                        v_admin_id
                     )
                     ON CONFLICT DO NOTHING;
                 END IF;

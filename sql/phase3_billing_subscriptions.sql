@@ -6,7 +6,11 @@
 -- Conforming to: Talentra Phase 3 Improved Schemas Specification (Module B)
 --
 -- Entities:
--- 1. Cross-Module Licence Anchor (licence.licence)
+-- 1. Licensing & Seat Allocation Subsystem (schema licence):
+--    - licence
+--    - seat_assignment (Recruiter seat quotas & active constraints)
+--    - registered_device (Device fingerprint SHA-256 tokens)
+--    - seat_allocation_history (Append-only audit trail)
 -- 2. Lookups (Rule Group 3):
 --    - billing_interval
 --    - entitlement_reset_period
@@ -58,7 +62,7 @@ CREATE SCHEMA IF NOT EXISTS licence;
 CREATE SCHEMA IF NOT EXISTS billing;
 
 -- ============================================================================
--- 1. CROSS-MODULE LICENCE ANCHOR (schema licence)
+-- 1. LICENSING & SEAT ALLOCATION SUBSYSTEM (schema licence)
 -- ============================================================================
 
 CREATE TABLE licence.licence (
@@ -74,6 +78,58 @@ CREATE TABLE licence.licence (
 );
 
 CREATE INDEX idx_licence_account_id ON licence.licence(account_id);
+
+CREATE TABLE licence.seat_assignment (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    licence_id bigint NOT NULL REFERENCES licence.licence(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
+    user_account_id bigint NOT NULL REFERENCES administration.user_account(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
+    assigned_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    assigned_by bigint NOT NULL REFERENCES administration.user_account(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
+    is_active boolean NOT NULL DEFAULT true,
+    revoked_at timestamptz NULL,
+    revoked_by bigint NULL REFERENCES administration.user_account(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
+    created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by bigint NOT NULL REFERENCES administration.user_account(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
+    updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by bigint NOT NULL REFERENCES administration.user_account(id) ON UPDATE NO ACTION ON DELETE RESTRICT
+);
+
+CREATE UNIQUE INDEX idx_seat_assignment_active_user ON licence.seat_assignment(licence_id, user_account_id) WHERE (is_active = true);
+CREATE INDEX idx_seat_assignment_licence_id ON licence.seat_assignment(licence_id);
+CREATE INDEX idx_seat_assignment_user_account ON licence.seat_assignment(user_account_id);
+
+CREATE TABLE licence.registered_device (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    seat_assignment_id bigint NOT NULL REFERENCES licence.seat_assignment(id) ON UPDATE NO ACTION ON DELETE CASCADE,
+    device_fingerprint_hash bytea NOT NULL,
+    device_name varchar(100) NOT NULL,
+    operating_system varchar(50) NOT NULL,
+    is_trusted boolean NOT NULL DEFAULT true,
+    last_seen_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    revoked_at timestamptz NULL,
+    created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_by bigint NOT NULL REFERENCES administration.user_account(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
+    updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_by bigint NOT NULL REFERENCES administration.user_account(id) ON UPDATE NO ACTION ON DELETE RESTRICT
+);
+
+CREATE UNIQUE INDEX idx_registered_device_active_fingerprint ON licence.registered_device(seat_assignment_id, device_fingerprint_hash) WHERE (revoked_at IS NULL);
+CREATE INDEX idx_registered_device_seat ON licence.registered_device(seat_assignment_id);
+
+CREATE TABLE licence.seat_allocation_history (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    licence_id bigint NOT NULL REFERENCES licence.licence(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
+    seat_assignment_id bigint NOT NULL REFERENCES licence.seat_assignment(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
+    user_account_id bigint NOT NULL REFERENCES administration.user_account(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
+    action_type varchar(30) NOT NULL,
+    actor_user_id bigint NOT NULL REFERENCES administration.user_account(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
+    reason text NULL,
+    created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT chk_seat_allocation_history_action CHECK (action_type IN ('assigned', 'revoked', 'transferred', 'suspended'))
+);
+
+CREATE INDEX idx_seat_history_licence ON licence.seat_allocation_history(licence_id);
+CREATE INDEX idx_seat_history_user ON licence.seat_allocation_history(user_account_id);
 
 -- ============================================================================
 -- 2. LOOKUP TABLES (Rule Group 3 Standard Pattern)
@@ -702,7 +758,23 @@ CREATE TRIGGER trg_outreach_credit_consumption_append_only
 BEFORE UPDATE OR DELETE ON billing.outreach_credit_consumption
 FOR EACH ROW EXECUTE FUNCTION enforce_append_only();
 
+CREATE TRIGGER trg_seat_allocation_history_append_only
+BEFORE UPDATE OR DELETE ON licence.seat_allocation_history
+FOR EACH ROW EXECUTE FUNCTION enforce_append_only();
+
 -- B. Updated_at maintenance triggers
+CREATE TRIGGER trg_licence_licence_updated_at
+BEFORE UPDATE ON licence.licence
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_seat_assignment_updated_at
+BEFORE UPDATE ON licence.seat_assignment
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+CREATE TRIGGER trg_registered_device_updated_at
+BEFORE UPDATE ON licence.registered_device
+FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
 CREATE TRIGGER trg_billing_subscription_plan_updated_at
 BEFORE UPDATE ON billing.subscription_plan
 FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -859,6 +931,86 @@ CREATE TRIGGER trg_profile_download_history_guard
 BEFORE INSERT OR UPDATE ON billing.profile_download_history
 FOR EACH ROW EXECUTE FUNCTION billing.fn_profile_download_history_guard();
 
+-- G. Enforce Seat Allocation Limit Against Subscription Plan Entitlement
+CREATE OR REPLACE FUNCTION licence.fn_enforce_seat_cap()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    v_max_seats integer;
+    v_active_seats integer;
+BEGIN
+    IF NEW.is_active = true THEN
+        -- Find maximum seats allowed for this licence from active plan entitlement
+        SELECT pe.quota INTO v_max_seats
+        FROM billing.account_subscription s
+        JOIN billing.subscription_status st ON st.id = s.subscription_status_id
+        JOIN billing.plan_entitlement pe ON pe.subscription_plan_id = s.subscription_plan_id
+        JOIN billing.feature f ON f.id = pe.feature_id
+        WHERE s.licence_id = NEW.licence_id
+          AND st.code = 'active'
+          AND f.code = 'recruiter_seats'
+        ORDER BY s.id DESC
+        LIMIT 1;
+
+        -- If a seat quota is configured, verify active seats count
+        IF v_max_seats IS NOT NULL THEN
+            SELECT COUNT(*) INTO v_active_seats
+            FROM licence.seat_assignment
+            WHERE licence_id = NEW.licence_id
+              AND is_active = true
+              AND id <> COALESCE(NEW.id, -1);
+
+            IF (v_active_seats + 1) > v_max_seats THEN
+                RAISE EXCEPTION 'Seat allocation limit exceeded for licence %: maximum allowed is %, current active is %',
+                    NEW.licence_id, v_max_seats, v_active_seats;
+            END IF;
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END $$;
+
+CREATE TRIGGER trg_enforce_seat_cap
+BEFORE INSERT OR UPDATE OF is_active ON licence.seat_assignment
+FOR EACH ROW EXECUTE FUNCTION licence.fn_enforce_seat_cap();
+
+-- H. Seat Assignment Audit Logger Trigger
+CREATE OR REPLACE FUNCTION licence.fn_seat_assignment_logger()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        INSERT INTO licence.seat_allocation_history (
+            licence_id, seat_assignment_id, user_account_id, action_type,
+            actor_user_id, reason, created_at
+        ) VALUES (
+            NEW.licence_id, NEW.id, NEW.user_account_id, 'assigned',
+            NEW.created_by, 'Seat allocated', CURRENT_TIMESTAMP
+        );
+    ELSIF TG_OP = 'UPDATE' THEN
+        IF OLD.is_active = true AND NEW.is_active = false THEN
+            INSERT INTO licence.seat_allocation_history (
+                licence_id, seat_assignment_id, user_account_id, action_type,
+                actor_user_id, reason, created_at
+            ) VALUES (
+                NEW.licence_id, NEW.id, NEW.user_account_id, 'revoked',
+                COALESCE(NEW.updated_by, NEW.created_by), 'Seat revoked', CURRENT_TIMESTAMP
+            );
+        ELSIF OLD.is_active = false AND NEW.is_active = true THEN
+            INSERT INTO licence.seat_allocation_history (
+                licence_id, seat_assignment_id, user_account_id, action_type,
+                actor_user_id, reason, created_at
+            ) VALUES (
+                NEW.licence_id, NEW.id, NEW.user_account_id, 'assigned',
+                COALESCE(NEW.updated_by, NEW.created_by), 'Seat reactivated', CURRENT_TIMESTAMP
+            );
+        END IF;
+    END IF;
+    RETURN NEW;
+END $$;
+
+CREATE TRIGGER trg_seat_assignment_audit_logger
+AFTER INSERT OR UPDATE OF is_active ON licence.seat_assignment
+FOR EACH ROW EXECUTE FUNCTION licence.fn_seat_assignment_logger();
+
 -- ============================================================================
 -- 9. GIN TRIGRAM AUTOCOMPLETE INDEXES (pg_trgm)
 -- ============================================================================
@@ -870,11 +1022,32 @@ CREATE INDEX idx_invoice_number_trgm ON billing.invoice USING gin (invoice_numbe
 -- 10. ROW-LEVEL SECURITY & ACTIVE CONVENIENCE VIEWS (Rule Group 9)
 -- ============================================================================
 
+ALTER TABLE licence.licence ENABLE ROW LEVEL SECURITY;
+ALTER TABLE licence.seat_assignment ENABLE ROW LEVEL SECURITY;
+ALTER TABLE licence.registered_device ENABLE ROW LEVEL SECURITY;
+ALTER TABLE licence.seat_allocation_history ENABLE ROW LEVEL SECURITY;
+
 ALTER TABLE billing.account_subscription ENABLE ROW LEVEL SECURITY;
 ALTER TABLE billing.wallet_account ENABLE ROW LEVEL SECURITY;
 ALTER TABLE billing.wallet_ledger ENABLE ROW LEVEL SECURITY;
 ALTER TABLE billing.payment_order ENABLE ROW LEVEL SECURITY;
 ALTER TABLE billing.invoice ENABLE ROW LEVEL SECURITY;
+
+CREATE OR REPLACE VIEW licence.v_active_seat_roster AS
+SELECT 
+    sa.id AS seat_assignment_id,
+    sa.licence_id,
+    l.account_id,
+    sa.user_account_id,
+    u.email AS user_email,
+    sa.assigned_at,
+    COUNT(rd.id) FILTER (WHERE rd.revoked_at IS NULL) AS active_device_count
+FROM licence.seat_assignment sa
+JOIN licence.licence l ON l.id = sa.licence_id
+JOIN administration.user_account u ON u.id = sa.user_account_id
+LEFT JOIN licence.registered_device rd ON rd.seat_assignment_id = sa.id
+WHERE sa.is_active = true
+GROUP BY sa.id, sa.licence_id, l.account_id, sa.user_account_id, u.email, sa.assigned_at;
 
 CREATE OR REPLACE VIEW billing.v_active_subscription_contract AS
 SELECT 

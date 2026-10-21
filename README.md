@@ -17,7 +17,7 @@ This repository contains the complete physical and logical database design acros
 5. **Organisation & Tenancy Module (`organisation`)**: Multi-tenant company hierarchy, corporate accounts, recruiter team seats, branch locations, KYC/compliance verification, and monthly partitioned enterprise audit logs (24 tables).
 6. **Gig Marketplace Subsystem (`gig`)**: Freelance service catalog, availability calendars, gig job requests, bid proposals, milestone contracts, deliverable submissions, dispute mediation, and two-way review matrices (27 tables).
 7. **Sourcing & Consultant Requests (`sourcing`)**: Consultant-led sourcing requests on open jobs, employer decision histories, bulk outreach campaign batches, recipient tracking, and shortlisted candidate provenance linkage (13 tables).
-8. **Licences Anchor (`licence`)**: Cross-module enterprise license contracts (1 table).
+8. **Licensing & Seat Management Subsystem (`licence`)**: Cross-module enterprise license contracts, named recruiter seat quota enforcement, hardware device fingerprint tokens, and immutable seat allocation audit logs (4 tables).
 9. **Subscriptions, Wallet, Payments & Download History (`billing`)**: Commercial plans, effective-dated prices with range exclusion constraints (`EXCLUDE USING gist`), non-overlapping subscription contract periods per licence, quota entitlement usage, credit wallets with cached balance synchronization, idempotent payment orders/transactions/inboxes, cumulative refund caps, and single-funding-source profile download histories (31 tables).
 
 ---
@@ -51,7 +51,7 @@ talentra-database-design/
 │   ├── phase2_organisation.sql                     # Phase 2 Organisation DDL (24 Tables)
 │   ├── phase2_gig_marketplace.sql                  # Phase 2 Gig Marketplace DDL (27 Tables)
 │   ├── phase3_sourcing.sql                         # Phase 3 Module A Sourcing DDL (13 Tables)
-│   ├── phase3_billing_subscriptions.sql            # Phase 3 Module B Subscriptions & Wallet DDL (32 Tables)
+│   ├── phase3_billing_subscriptions.sql            # Phase 3 Module B Subscriptions & Licensing DDL (35 Tables)
 │   ├── seed.sql                                    # Phase 1 Master & Candidate seed data
 │   ├── seed_administration.sql                     # Phase 2 Administration & Role seed data
 │   ├── seed_organisation.sql                       # Phase 2 Organisation & Account seed data
@@ -62,12 +62,12 @@ talentra-database-design/
 │   ├── administration_regression_test.sql          # Phase 2 Administration test suite (30 tests)
 │   ├── organisation_regression_test.sql            # Phase 2 Organisation test suite (21 tests)
 │   ├── gig_regression_test.sql                     # Phase 2 Gig Marketplace test suite (9 assertions)
-│   ├── sourcing_regression_test.sql                # Phase 3 Sourcing regression test suite (10 assertions)
-│   ├── billing_subscriptions_regression_test.sql   # Phase 3 Subscriptions & Wallet regression suite (10 assertions)
+│   ├── sourcing_regression_test.sql                # Phase 3 Sourcing regression test suite (13 assertions)
+│   ├── billing_subscriptions_regression_test.sql   # Phase 3 Subscriptions & Licensing regression suite (16 assertions)
 │   ├── setup_all.sql                               # Master 1-Click Provisioning Runner
 │   └── test_all.sql                                # Master 1-Click Regression Test Runner
-├── inspect_schema.py                               # Schema inspection & table counter
-├── run_all_tests.py                                # Master 44-suite automated verification engine
+├── inspect_schema.py                               # Schema inspection & table counter (171 tables)
+├── run_all_tests.py                                # Master 48-suite automated verification engine
 └── README.md                                       # Project documentation & execution guide
 ```
 
@@ -84,9 +84,9 @@ talentra-database-design/
 | `organisation` | **24** | 22 | 26 | Multi-tenant company hierarchy, corporate accounts, recruiter team seats, branches, KYC, monthly partitioned audit trails |
 | `gig` | **27** | 19 | 16 | Freelance service catalog, availability calendars, gig requests, proposals, milestone contracts, deliverables, reviews |
 | `sourcing` | **13** | 20 | 12 | Consultant sourcing requests, decisions, outreach batches, shortlist provenance |
-| `licence` | **1** | 1 | 2 | Cross-module enterprise license contracts |
+| `licence` | **4** | 8 | 8 | Cross-module enterprise license contracts, named recruiter seat quota enforcement, device security, audit history |
 | `billing` | **31** | 44 | 26 | Commercial plans, prices, exclusion periods, payments, refunds, invoices, credit wallet |
-| **Total** | **168** | **187** | **112** | **Full Phase 1, Phase 2, & Phase 3 Scope (100% PRD & DDD Compliant)** |
+| **Total** | **171** | **194** | **118** | **Full Phase 1, Phase 2, & Phase 3 Scope (100% PRD & DDD Compliant)** |
 
 ---
 
@@ -96,7 +96,7 @@ talentra-database-design/
 ```bash
 python run_all_tests.py
 ```
-*(Runs 44 verification suites and validates zero duplication across 168 tables and 143 indexes).*
+*(Runs 48 verification suites and validates zero duplication across 171 tables and 194 indexes).*
 
 ### 2. Inspect Schema Structure
 ```bash
