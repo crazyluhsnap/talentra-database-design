@@ -8,7 +8,10 @@ def inspect():
         'sql/phase2_organisation.sql',
         'sql/phase2_gig_marketplace.sql',
         'sql/phase3_sourcing.sql',
-        'sql/phase3_billing_subscriptions.sql'
+        'sql/phase3_billing_subscriptions.sql',
+        'sql/phase4_engagement_community.sql',
+        'sql/phase4_analytics_marts.sql',
+        'sql/phase4_governance_shared.sql'
     ]
     all_sql = ""
     for file_path in sql_files:
@@ -21,8 +24,8 @@ def inspect():
     # Find schemas
     schemas = sorted(list(set(re.findall(r'CREATE SCHEMA IF NOT EXISTS\s+(\w+);', all_sql, re.IGNORECASE))))
     
-    # Find tables
-    table_pattern = re.compile(r'CREATE TABLE\s+([a-zA-Z0-9_\.]+)\s*\((.*?)\);', re.DOTALL | re.IGNORECASE)
+    # Find tables (supports optional IF NOT EXISTS)
+    table_pattern = re.compile(r'CREATE TABLE\s+(?:IF NOT EXISTS\s+)?([a-zA-Z0-9_\.]+)\s*\((.*?)\);', re.DOTALL | re.IGNORECASE)
     tables = table_pattern.findall(all_sql)
 
     print("=" * 70)

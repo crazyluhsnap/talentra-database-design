@@ -69,12 +69,14 @@ CREATE TABLE licence.licence (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     account_id bigint NOT NULL REFERENCES organisation.account(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
     licence_key varchar(100) NOT NULL,
+    max_devices_per_user integer NOT NULL DEFAULT 3,
     is_active boolean NOT NULL DEFAULT true,
     created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
     created_by bigint NOT NULL REFERENCES administration.user_account(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
     updated_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_by bigint NOT NULL REFERENCES administration.user_account(id) ON UPDATE NO ACTION ON DELETE RESTRICT,
-    CONSTRAINT uq_licence_key UNIQUE (licence_key)
+    CONSTRAINT uq_licence_key UNIQUE (licence_key),
+    CONSTRAINT ck_licence_max_devices CHECK (max_devices_per_user >= 1)
 );
 
 CREATE INDEX idx_licence_account_id ON licence.licence(account_id);

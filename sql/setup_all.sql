@@ -30,6 +30,15 @@
 \echo '>>> Deploying Phase 3 Module B: Subscriptions, Wallet & Payments...'
 \ir phase3_billing_subscriptions.sql
 
+\echo '>>> Deploying Phase 4 Module A: Engagement, Notifications & Community...'
+\ir phase4_engagement_community.sql
+
+\echo '>>> Deploying Phase 4 Module B: Analytics Layer & Reporting Marts...'
+\ir phase4_analytics_marts.sql
+
+\echo '>>> Deploying Phase 4 Module C: Shared Governance & Identity Extensions...'
+\ir phase4_governance_shared.sql
+
 \echo '>>> Seeding Phase 1 Master Data & Core Fixtures...'
 \ir seed.sql
 
@@ -47,5 +56,17 @@
 
 \echo '>>> Seeding Phase 3 Module B: Subscriptions, Plans & Wallet Fixtures...'
 \ir seed_phase3_billing.sql
+
+\echo '>>> Seeding Phase 4 Module A: Engagement & Notification Fixtures...'
+\ir seed_phase4_engagement.sql
+
+\echo '>>> Seeding Phase 4 Module B: Analytics Dimensions & Watermarks...'
+\ir seed_phase4_analytics.sql
+
+\echo '>>> Seeding Phase 4 Module C: Consent Policies & Retention Rules...'
+\ir seed_phase4_governance.sql
+
+\echo '>>> Seeding Phase 5 Synthetic Multi-Module Fixtures (Milestone 19)...'
+\ir seed_phase5_synthetic.sql
 
 \echo '>>> ALL SCHEMAS AND SEEDS DEPLOYED SUCCESSFULLY!'

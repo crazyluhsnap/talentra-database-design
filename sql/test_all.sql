@@ -24,4 +24,16 @@
 \echo '>>> Running Phase 3 Module B (Subscriptions & Wallet) Regression Tests...'
 \ir billing_subscriptions_regression_test.sql
 
+\echo '>>> Running Phase 4 Module A (Engagement & Notifications) Regression Tests...'
+\ir phase4_engagement_regression_test.sql
+
+\echo '>>> Running Phase 4 Module B (Analytics Marts) Regression Tests...'
+\ir phase4_analytics_regression_test.sql
+
+\echo '>>> Running Phase 4 Module C (Governance & Blocking) Regression Tests...'
+\ir phase4_governance_regression_test.sql
+
+\echo '>>> Running Phase 5 Security & Access Control Regression Tests (B79)...'
+\ir phase5_security_regression_test.sql
+
 \echo '>>> ALL MULTI-MODULE TEST SUITES PASSED WITH ZERO REGRESSIONS!'
